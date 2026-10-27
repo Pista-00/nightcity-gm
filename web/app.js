@@ -611,7 +611,9 @@ function editor() {
     derivedBox.replaceChildren(...(dv ? [
       ["RUN", `${dv.run}m`], ["LEAP", `${dv.leap}m`], ["휴머니티", `${dv.humanity}/${dv.humanity_max}`], ["현재 EMP", dv.emp_current],
       ["BTM", `${dv.btm} (${dv.body_label})`], ["Save", dv.save], ["운반", `${dv.carry}kg`], ["픽업 포인트", dv.pickup_points],
-    ].map(([k, v]) => h("span", {}, `${k} `, h("b", {}, v))) : []));
+    ].map(([k, v]) => h("span", { title: DERIVED_HELP[k] || "" }, `${k} `, h("b", {}, v))) : []),
+      dv ? h("details", { class: "help-details" }, h("summary", {}, "이 수치들은 무엇인가요?"),
+        h("ul", {}, Object.entries(DERIVED_HELP).map(([k, v]) => h("li", {}, h("b", {}, k), ` – ${v}`)))) : "");
     problemsBox.replaceChildren(S.problems.length ? h("ul", { class: "problems" }, S.problems.map((p) => h("li", {}, p))) : h("span", { class: "ok small" }, "✓ 규칙상 문제 없음"));
     if (m.stat_method === "fast" && d.stat_pool) {
       const left = [...d.stat_pool.values];
@@ -658,15 +660,17 @@ function editor() {
           d.pickupRows = d.pickupRows.filter((p) => !d.slots.some((s) => s.name === p.name));
           render(); recheck(render);
         } },
-        h("b", {}, `${r.ko} `, h("span", { class: "dim small" }, k)), h("span", { class: "small" }, `특수능력: ${r.special}`)))),
+        h("b", {}, `${r.ko} `, h("span", { class: "dim small" }, k)), h("span", { class: "small" }, `특수능력: ${r.special}`),
+        skillHelp(r.special) ? h("div", { class: "skill-help" }, skillHelp(r.special).replace(/ – [^–]+$/, "")) : null))),
     d.role ? h("p", { class: "small", style: "margin:10px 0 0" }, roleOf(d).desc) : null);
 
   // --- 능력치
   const statInputs = S.cg.stats.map(([k, ko, desc]) => h("div", { class: "stat", title: desc },
-    h("div", { class: "k" }, k), h("div", { class: "n" }, ko),
+    h("div", { class: "k" }, k), h("div", { class: "n" }, ko), h("div", { class: "d" }, STAT_HELP[k] || desc),
     h("input", { type: "number", min: 2, max: 10, value: d.stats[k], oninput: change((e) => (d.stats[k] = e.target.value)) })));
   const stats = h("div", { class: "card" },
     h("div", { class: "row", style: "justify-content:space-between" }, h("h3", { style: "margin:0" }, "능력치 (Stats)"), statCounter),
+    h("p", { class: "help" }, "능력치는 타고난 바탕입니다. 모든 판정은 ", h("b", {}, "능력치 + 스킬 + 1D10"), " 을 난이도(쉬움 10 · 보통 15 · 어려움 20 · 매우 어려움 25 · 거의 불가 30)와 비교합니다. 보통 사람은 5~6, 뛰어나면 8 이상. 역할에 중요한 능력치에 점수를 몰아 주세요."),
     m.stat_method !== "cinematic" ? h("div", { class: "row", style: "margin:10px 0" },
       h("button", { class: "cyan sm", onclick: async () => {
         if (d.stat_pool && !confirm("다시 굴릴까요? (그룹 규칙에 따라 재굴림이 허용되지 않을 수 있어요)")) return;
@@ -680,10 +684,11 @@ function editor() {
   // --- 커리어
   const career = d.role ? h("div", { class: "card" },
     h("div", { class: "row", style: "justify-content:space-between" }, h("h3", { style: "margin:0" }, "커리어 스킬 – 40점"), careerCounter),
-    h("p", { class: "dim small" }, "첫 줄은 역할의 특수능력(최소 1). 각 스킬 최대 10. 판정 = 능력치 + 스킬 + 1D10."),
+    h("p", { class: "help" }, "역할의 전문 스킬 10개에 40점을 나눕니다. 첫 줄은 그 역할만 가진 ", h("b", {}, "특수능력"), "(최소 1). 스킬 수치는 0~10 – +2~3 기본기, +5~6 숙련, +8 이상 전문가. 오른쪽 작은 글씨는 판정할 때 함께 더하는 능력치입니다."),
     h("table", { class: "skill-table" }, d.slots.map((s, i) => h("tr", {},
-      h("td", {}, s.choice ? select(s.options.map((o) => [o, o]), s.name, (v) => { s.name = v; recheck(refreshSide); }) : h("b", {}, s.name),
-        i === 0 ? h("span", { class: "badge pink", style: "margin-left:8px" }, "특수능력") : null),
+      h("td", {}, s.choice ? select(s.options.map((o) => [o, o]), s.name, (v) => { s.name = v; render(); recheck(render); }) : h("b", {}, s.name),
+        i === 0 ? h("span", { class: "badge pink", style: "margin-left:8px" }, "특수능력") : null,
+        skillHelp(s.name) ? h("div", { class: "skill-help" }, skillHelp(s.name)) : null),
       h("td", { class: "stat-tag" }, S.cg.skill_stat[s.name] || ""),
       h("td", {}, h("input", { type: "number", min: 0, max: 10, value: s.value, oninput: change((e) => (s.value = +e.target.value || 0)) })))))) : null;
 
@@ -694,7 +699,8 @@ function editor() {
     h("div", { class: "row", style: "justify-content:space-between" }, h("h3", { style: "margin:0" }, "픽업 스킬 – REF+INT 점"), pickCounter),
     h("p", { class: "dim small" }, "커리어에 없는 아무 스킬에 자유롭게. 언어(Know Language)·전문지식(Expert)도 여기서."),
     h("table", { class: "skill-table" }, d.pickupRows.map((r, i) => h("tr", {},
-      h("td", {}, select([["", "— 스킬 선택 —"], ...allSkills], r.name, (v) => { r.name = v; recheck(refreshSide); })),
+      h("td", {}, select([["", "— 스킬 선택 —"], ...allSkills], r.name, (v) => { r.name = v; render(); recheck(render); }),
+        skillHelp(r.name) ? h("div", { class: "skill-help" }, skillHelp(r.name)) : null),
       h("td", {}, h("input", { type: "number", min: 0, max: 10, value: r.value, oninput: change((e) => (r.value = +e.target.value || 0)) }),
         h("button", { class: "sm ghost", onclick: () => { d.pickupRows.splice(i, 1); render(); recheck(render); } }, "✕"))))),
     h("button", { class: "sm cyan", style: "margin-top:8px", onclick: () => { d.pickupRows.push({ name: "", value: 1 }); render(); } }, "＋ 스킬 추가")) : null;
@@ -732,12 +738,15 @@ function editor() {
         h("span", { class: "dim small" }, ` = 월급 ${d.money.salary.toLocaleString()} × ${d.money.months}개월 (1D6=${d.money.months_roll}÷3) · 직업 1D6=${d.money.job_roll} ${d.money.unemployed ? "→ 현재 실직 중" : "→ 재직 중"}`))
         : h("span", { class: "dim small" }, `특수능력 ${lvl} 기준 월급 × 1D6÷3 개월`)) : h("p", { class: "dim small" }, "역할을 먼저 고르세요."),
     h("h3", { style: "margin-top:16px" }, "사이버웨어"),
+    h("p", { class: "help" }, "몸에 심은 기계 장치입니다(의안·의수·반사신경 강화·피부 장갑 등). 강해지지만 설치할 때마다 ", h("b", {}, "휴머니티"), " 가 줄고(HL), 10 줄 때마다 EMP 가 1 내려갑니다. 이름과 굴린 HL 값을 적으세요. 가격·효과는 룰북의 사이버웨어 표를 참고하거나 AI 도우미에게 맡기세요."),
     h("table", { class: "skill-table" }, d.cyberware.map((c, i) => h("tr", {},
       h("td", {}, h("input", { type: "text", class: "wide", value: c.name, placeholder: "예) Cyberoptics + Low-lite", oninput: (e) => (c.name = e.target.value) })),
       h("td", {}, "HL ", h("input", { type: "number", min: 0, value: c.hl, oninput: change((e) => (c.hl = +e.target.value || 0)) }),
         h("button", { class: "sm ghost", onclick: () => { d.cyberware.splice(i, 1); render(); recheck(render); } }, "✕"))))),
     h("button", { class: "sm cyan", style: "margin:8px 0 14px", onclick: () => { d.cyberware.push({ name: "", hl: 0 }); render(); } }, "＋ 사이버웨어"),
     h("span", { class: "dim small" }, "  HL = 휴머니티 손실(설치 시 굴린 값)"),
+    h("p", { class: "help", style: "margin-top:4px" }, "장비는 한 줄에 하나씩, GM 이 판정에 쓸 수 있게 적어 두세요. ", h("b", {}, "무기"), ": 이름·종류·피해(예: 2D6+1)·장탄수 / ",
+      h("b", {}, "방어구"), ": SP(막아 주는 피해량)와 EV(REF 감소) / 그 밖에 도구·약·차량. 시작 자금 안에서 고르면 됩니다."),
     field("장비 (한 줄에 하나)", h("textarea", { rows: 5, placeholder: "Militech Arms Avenger (중형 권총) 250eb\n아머재킷 경량 SP14 150eb\n…", oninput: (e) => (d.gear = e.target.value) }, d.gear || "")),
     field("메모 (외모·성격·말버릇)", h("textarea", { rows: 3, oninput: (e) => (d.notes = e.target.value) }, d.notes || "")));
 
