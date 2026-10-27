@@ -1,0 +1,192 @@
+# 미리 만들어 두는 상황별 이미지 라이브러리
+# - build_library.py 가 images/<id>.png 가 없는 항목만 생성 (Actions: "Build image library" 수동 실행)
+# - 진행 중 해당 상황이 오면 장면 파일의 image: 에 id 를 적거나, post_image 워크플로로 Notion에 바로 전송
+# - 공통 스타일 문구는 스크립트가 프롬프트 뒤에 자동으로 붙임
+# - 폭력 장면은 생성 거절을 피하려고 "직전·긴장감" 위주로 묘사 (유혈 직접 묘사 금지)
+
+# ───────── 도시 · 거리
+- id: city-night-rain
+  title: 비 내리는 나이트시티 야경 (오프닝)
+  tags: [도시, 오프닝, 야간]
+  prompt: Rainy cyberpunk megacity at night, towering dark corporate skyscraper with red light strips, armored VTOL police aircraft sweeping a searchlight over the street, neon signs in pink and cyan reflected on wet asphalt, lone figure in a long coat with a glowing red cybernetic eye and chrome arm, purple-magenta smog
+
+- id: city-corporate-zone-day
+  title: 기업 구역 낮 풍경
+  tags: [도시, 기업, 주간]
+  prompt: Clean gleaming corporate downtown plaza in daytime under grey smoggy sky, glass skyscrapers, armored corporate security guards in helmets patrolling, maglev train on elevated track, well-dressed executives with briefcases, holographic advertisements
+
+- id: city-combat-zone
+  title: 컴뱃존 거리
+  tags: [도시, 컴뱃존, 위험]
+  prompt: Ruined urban combat zone street at dusk, burned-out tenements, abandoned rusted cars, graffiti, burning trash barrels, silhouettes of armed gang members watching from rooftops, broken streetlights, smoke and drizzle
+
+- id: city-alley-night
+  title: 뒷골목 (습격·매복)
+  tags: [골목, 매복, 야간]
+  prompt: Narrow back alley at night behind a rock club, dumpsters and steam vents, puddles reflecting blue neon, three punk figures with bright mohawks and high-collared gang jackets approaching from the shadows, one with chrome claws catching the light, tense ambush moment
+
+- id: city-dataterm-corner
+  title: 데이터텀이 있는 거리 모퉁이
+  tags: [도시, 정보]
+  prompt: Rainy street corner with an armored concrete public information terminal glowing with a green screen, a hooded figure plugging a cable from their wrist into it, newspaper fax-box printing a flimsy screamsheet, passing traffic blur
+
+- id: city-rooftop-sniper
+  title: 옥상 저격 포인트
+  tags: [옥상, 저격, 야간]
+  prompt: Rooftop of an old brick hotel at night, rusting fire escape, a sniper lying prone with a long black rifle overlooking a crowded park and a corporate tower across the street, city lights below, rain
+
+# ───────── 바 · 클럽 · 아지트
+- id: bar-fern-upscale
+  title: 고급 펀 바 (일거리 구하는 코프·솔로)
+  tags: [바, 의뢰, 협상]
+  prompt: Upscale 2020s retro-futurist fern bar with brass doors, potted plants and warm amber lighting, mercenaries in armor jackets and corporate executives in suits talking in leather booths, a woman with mirrored sunglasses sitting with her back to the wall watching the room
+
+- id: bar-firefight
+  title: 바 안의 총격전 직전
+  tags: [바, 전투]
+  prompt: Inside a dim bar, the instant a gunfight erupts, patrons diving behind overturned tables, figures in armor jackets drawing pistols and submachine guns, shattered glass hanging in the air, a big window breaking, muzzle flashes lighting the smoke, dramatic action freeze-frame
+
+- id: bar-mortuary
+  title: 옛 장례식장을 개조한 솔로들의 바
+  tags: [바, 솔로, 의뢰]
+  prompt: Gothic nightclub built inside an old mortuary, candles and neon, coffins used as tables, heavily cybered mercenaries drinking, dark red and violet lighting, a fixer in a long coat leaning on the bar waiting for clients
+
+- id: bar-netrunner
+  title: 넷러너·테키 단골 바 뒷방 상점
+  tags: [바, 넷러너, 상점]
+  prompt: Cramped back room of a hacker bar filled with stacked computer gear, cables, glowing monitors and data chips in jars, a wiry netrunner with interface plugs at the temples selling software chips across a cluttered counter
+
+- id: club-dance
+  title: 댄스 클럽 라이브
+  tags: [클럽, 공연]
+  prompt: Packed cyberpunk dance club, live band on a small stage with electric guitar, crowd of punks, chrome-armed metalheads and fashion posers, laser lights and fog, sweat and energy
+
+- id: concert-crowd-riot
+  title: 공원 무료 공연 – 군중이 폭동 직전
+  tags: [공연, 군중, 폭동]
+  prompt: Huge crowd of thousands in an urban park at sunset facing a makeshift stage, a rock singer with a chrome cybernetic arm raising a fist, across the street a line of corporate security guards with rifles in front of a dark corporate tower, tension about to explode
+
+- id: safehouse-motel
+  title: 싸구려 모텔 은신처
+  tags: [은신처, 계획]
+  prompt: Cheap motel room used as a mercenary safehouse, weapons and armor laid out on the bed, building blueprints taped to the wall, a portable cyberdeck glowing on the table, rain on the window with flashing motel neon outside
+
+# ───────── 기업
+- id: corp-tower-exterior
+  title: 기업 타워 외관
+  tags: [기업, 타워]
+  prompt: Imposing 22-story black corporate security headquarters tower at night with red accent lights, armored guards at the entrance, an aerodyne landing pad on the roof, searchlights, intimidating fortress architecture
+
+- id: corp-lobby-chaos
+  title: 기업 로비 – 폭도 난입
+  tags: [기업, 잠입, 혼란]
+  prompt: Marble corporate lobby being flooded by a rioting crowd smashing through glass doors, overwhelmed security desk with monitor screens, smoke from a flash grenade, two figures in gang jackets slipping toward a stairwell amid the chaos
+
+- id: corp-elevator-shaft
+  title: 엘리베이터 통로
+  tags: [기업, 잠입]
+  prompt: Inside a tall elevator shaft, two operatives crouching on top of a moving elevator car, cables and counterweights, red emergency lights, an express elevator car looming above, vertigo perspective
+
+- id: corp-executive-office
+  title: 최상층 임원실 (보안 레이저)
+  tags: [기업, 임원, 최종장]
+  prompt: Top-floor corporate executive office at night with panoramic city view, sleek desk, a calm executive in a tailored suit holding a glass of scotch, a huge bodyguard with metal face plating, ceiling-mounted laser turrets in the corners, a woman unconscious in a netrunning chair connected by cables
+
+- id: corp-meeting-fixer
+  title: 의뢰인과의 비밀 미팅
+  tags: [의뢰, 협상, 기업]
+  prompt: Discreet meeting in a private booth of an expensive restaurant, a corporate agent in a grey suit sliding a data chip across the table to a group of mercenaries, bodyguards standing in the background, cold blue lighting
+
+# ───────── 넷
+- id: net-grid
+  title: 넷 – 그리드 공간
+  tags: [넷, 넷러닝]
+  prompt: Abstract cyberspace, an endless blue-white glowing grid stretching to the horizon, floating geometric data structures shaped like corporate logos, a netrunner avatar in chrome armor flying over it, streams of light, deep black void
+
+- id: net-data-fortress
+  title: 넷 – 데이터 요새와 방어 프로그램
+  tags: [넷, 데이터요새, 전투]
+  prompt: A towering neon data fortress in cyberspace with glowing walls and a single code gate, a monstrous black metal hound program with white burning eyes guarding it, a netrunner avatar raising a shimmering shield, electric arcs
+
+- id: net-netrunner-jackin
+  title: 현실 – 잭인한 넷러너
+  tags: [넷러너, 현실]
+  prompt: A netrunner slumped in a chair in a dark apartment, cables running from wrist plugs to a small cyberdeck, eyes closed, face lit by the deck's glow, a teammate with a pistol guarding the door
+
+# ───────── 의료 · 사이버웨어
+- id: med-ripperdoc
+  title: 리퍼닥 진료소
+  tags: [의료, 사이버웨어, 리퍼닥]
+  prompt: Grimy underground ripperdoc clinic, surgical chair under multi-faceted sterilizer lamps, robotic surgical arms, cybernetic limbs and eyes in glass jars, a doctor with magnifying cyber-optics working on a patient's chrome arm
+
+- id: med-trauma-team
+  title: 트라우마 팀 착륙
+  tags: [의료, 트라우마팀]
+  prompt: Armored paramedic VTOL aircraft landing in a rainy street with jet wash blowing trash, medics in white armored suits running with a stretcher, security officers with heavy guns covering them, flashing red and white lights
+
+- id: med-hospital-recovery
+  title: 병실 회복
+  tags: [의료, 휴식]
+  prompt: Hospital recovery room in the dark future, patient connected to life support and biomonitor displays, rain on the window, a friend sitting in a chair cleaning a pistol, quiet melancholic mood
+
+# ───────── 도로 · 노매드 · 야외
+- id: road-nomad-convoy
+  title: 노매드 캐러밴
+  tags: [노매드, 도로]
+  prompt: Nomad convoy of armored trucks, school buses, RVs and motorcycles on a desert freeway at golden hour, scouts on cyberbikes riding ahead, families and armed riders, dust clouds
+
+- id: road-nomad-camp
+  title: 협곡의 노매드 캠프
+  tags: [노매드, 캠프]
+  prompt: Dusty nomad camp in a dry canyon, old school buses and pickups arranged in a circle, campfires, children playing, a borrowed well-drilling truck, a small surveillance drone high in the sky
+
+- id: road-truck-chase
+  title: 고속도로 추격전 (장갑 트랙터)
+  tags: [도로, 추격, 수송]
+  prompt: Heavily armored futuristic semi-truck tractor racing down a midwest highway at night, escort sedans beside it, an attack helicopter and black pursuit cars closing in, tracer lights, speed blur
+
+- id: raft-city
+  title: 뗏목 도시와 해적방송 바지선
+  tags: [해상, 해적방송]
+  prompt: Floating raft city off the coast of a megacity, makeshift shacks on barges and pontoons connected by narrow canals, an old steel barge with a tall radio mast covered in antennas, speedboats, laundry lines, sunset over polluted water
+
+- id: heist-snowstorm
+  title: 폭설 속 금고 강도
+  tags: [강도, 눈, 뉴욕]
+  prompt: Blizzard in a dark future New York City at night, deep snow on empty streets, figures in white parkas on snowmobiles approaching a fortified precious metals vault building, surveillance cameras on rooftops
+
+- id: lab-desert-night
+  title: 사막의 기업 연구소 (추출 작전)
+  tags: [기업, 추출, 야외]
+  prompt: Isolated corporate research lab in a snowy high desert at night, three-story building and a hangar, perimeter fence with sensors, a utility helicopter with a nose cannon on a pad, guard pairs with thermal goggles patrolling, infiltrators crouching in the scrub
+
+- id: toxic-dig
+  title: 땅속에서 드러난 독극물 경고석
+  tags: [노매드, 비밀, 발견]
+  prompt: Workers at a well-drilling rig in a dusty canyon uncovering a broken concrete warning block with stenciled hazard text, oily yellow liquid seeping from the soil, rusted crushed drums, people covering their mouths
+
+# ───────── 특수 상황
+- id: cyberpsycho
+  title: 사이버사이코 출현
+  tags: [사이코, 위기]
+  prompt: A towering heavily cybered man with exposed chrome limbs and glowing eyes standing in a ruined subway station, sparks and smoke, a police tactical squad in heavy armor taking cover behind pillars, menacing horror atmosphere
+
+- id: gang-booster-lair
+  title: 부스터갱 아지트
+  tags: [갱, 아지트]
+  prompt: Booster gang lair in an abandoned warehouse covered in graffiti, gang leader on a makeshift throne with metal arms crossed, members with chrome claws and mohawks around oil-drum fires, deafening hardcore music speakers
+
+- id: gang-cultists
+  title: 반사이버웨어 컬트 갱
+  tags: [갱, 컬트]
+  prompt: Six figures in hooded red robes with hidden nunchaku blocking a neon-lit street at midnight, their leader pointing accusingly at a passerby with designer cybernetic eyes, ominous religious fanaticism
+
+- id: police-checkpoint
+  title: 경찰 검문
+  tags: [경찰, 긴장]
+  prompt: Two riot-armored city police officers with assault rifles stopping a group of edgy punks under a flickering streetlight, an armored patrol car with flashing lights, rain, tense standoff
+
+- id: character-creation
+  title: 0회차 – 신분 등록 / 캐릭터 생성 배경
+  tags: [0회차, 캐릭터]
+  prompt: Close-up of a holographic personnel dossier display floating over a cluttered desk in a dark apartment, silhouettes of several different street mercenaries reflected in the glass, data readouts, neon light through blinds

@@ -1,0 +1,5 @@
+flask>=3.0
+requests>=2.31
+PyYAML>=6.0
+pypdf>=4.0
+# 이미지 자동 생성(scripts/build_library.py)을 쓸 때만: pip install openai

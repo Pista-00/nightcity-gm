@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+# 로컬 전용 – 키, 설정, 플레이 기록 (절대 커밋 금지)
+.env.local
+settings.json
+campaigns/
+# 사용자 룰북에서 만든 데이터 (절대 커밋·공유 금지)
+book/
+*.pdf
