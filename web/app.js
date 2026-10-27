@@ -75,7 +75,7 @@ async function refreshCamp() { if (S.camp) S.camp = await GET(`/api/campaign/${e
 function aiReady() {
   const s = S.state.settings;
   const p = S.state.providers.find((x) => x.name === s.provider);
-  if (p && p.kind === "subscription") return !!(s.model && S.state.claude_code?.installed && S.state.claude_code?.loggedIn);
+  if (p && p.kind === "subscription") return !!(s.model && p.status?.installed && p.status?.loggedIn);
   return !!(p && s.model && p.needs.every((n) => !n.required || S.state.credentials[n.key]));
 }
 const notionTokenSet = () => !!S.state.credentials.NOTION_TOKEN;
@@ -111,7 +111,7 @@ function render() {
   const prov = S.state.providers.find((p) => p.name === s.provider);
   $("#statusPills").replaceChildren(
     h("span", { class: `pill ${aiReady() ? "on" : "off"}`, onclick: () => go("connect") },
-      aiReady() ? `AI: ${prov.kind === "subscription" ? "Claude 구독" : prov.label.split(" ")[0]} · ${s.model}` : "AI 미연결"),
+      aiReady() ? `AI: ${prov.kind === "subscription" ? (prov.name === "chatgpt-codex" ? "ChatGPT 구독" : "Claude 구독") : prov.label.split(" ")[0]} · ${s.model}` : "AI 미연결"),
     h("span", { class: `pill ${notionTokenSet() && S.camp?.notion_ready ? "on" : "off"}`, onclick: () => go(notionTokenSet() ? "campaign" : "connect") },
       notionTokenSet() ? (S.camp?.notion_ready ? "Notion 연결됨" : "Notion 페이지 미지정") : "Notion 미연결"));
   // steps
@@ -148,35 +148,49 @@ function viewConnect() {
     await guard(() => POST("/api/ai", { provider: p.name, model: p.default_model || "" }));
     await load(); render();
   };
-  const sub = S.state.providers.find((p) => p.kind === "subscription");
+  const subs = S.state.providers.filter((p) => p.kind === "subscription");
   const apis = S.state.providers.filter((p) => p.kind !== "subscription");
   const useSub = cur?.kind === "subscription";
   if (S.showApi === undefined) S.showApi = !!cur && !useSub;
-  const cc = S.state.claude_code || {};
-  const ccBox = h("div", { class: "card", style: "background:#0e1120;margin:12px 0 0" },
-    h("div", { class: "row" },
-      h("b", {}, "Claude Code 상태"),
-      cc.installed ? h("span", { class: "badge ok" }, `설치됨 ${cc.version || ""}`) : h("span", { class: "badge pink" }, "설치 필요"),
-      cc.installed ? (cc.loggedIn ? h("span", { class: "badge ok" }, `로그인됨${cc.authMethod === "oauth_token" ? " (구독 계정)" : cc.authMethod ? ` (${cc.authMethod})` : ""}`) : h("span", { class: "badge pink" }, "로그인 필요")) : null,
-      h("button", { class: "sm", onclick: async (e) => {
-        e.target.disabled = true; e.target.textContent = "확인 중…";
-        S.state.claude_code = await guard(() => POST("/api/claude-code/status")) || cc; render();
-      } }, "다시 확인")),
-    cc.installed && cc.loggedIn ? h("p", { class: "dim small", style: "margin:8px 0 0" }, "준비됐습니다. 사용량은 API 요금이 아니라 구독 사용 한도에서 차감됩니다. 한도가 빨리 줄면 아래 룰 자료를 '색인' 으로 두세요.") :
-      h("ol", { class: "small", style: "margin:10px 0 0;padding-left:18px;line-height:1.9" },
-        h("li", {}, "Claude Code 설치 – 터미널(맥) 또는 PowerShell(윈도우)에서:",
-          h("div", { class: "mono", style: "background:#07090f;padding:6px 10px;border-radius:6px;margin:4px 0" },
-            "맥: curl -fsSL https://claude.ai/install.sh | bash", h("br"), "윈도우: irm https://claude.ai/install.ps1 | iex")),
-        h("li", {}, "로그인 – 터미널에서 ", h("span", { class: "mono" }, "claude"), " 실행 → 안내에 따라 ", h("b", {}, "Claude 구독 계정"), " 으로 로그인 → ", h("span", { class: "mono" }, "/exit")),
-        h("li", {}, "이 화면에서 ‘다시 확인’"),
-        h("li", { class: "dim" }, "자세한 설치 안내: ", h("a", { href: "https://code.claude.com/docs/en/setup", target: "_blank" }, "Claude Code 설치 문서"))));
+  const SUB_GUIDE = {
+    "claude-code": { tool: "Claude Code", install: ["맥: curl -fsSL https://claude.ai/install.sh | bash", "윈도우: irm https://claude.ai/install.ps1 | iex"],
+      login: [h("span", { class: "mono" }, "claude"), " 실행 → ", h("b", {}, "Claude 구독 계정"), " 으로 로그인 → ", h("span", { class: "mono" }, "/exit")],
+      doc: ["https://code.claude.com/docs/en/setup", "Claude Code 설치 문서"], okMethod: { oauth_token: "구독 계정" } },
+    "chatgpt-codex": { tool: "Codex CLI", install: ["맥: brew install --cask codex  (또는 npm i -g @openai/codex)", "윈도우: npm i -g @openai/codex  (Node.js 필요)"],
+      login: [h("span", { class: "mono" }, "codex login"), " 실행 → 브라우저에서 ", h("b", {}, "ChatGPT 계정"), " 으로 로그인"],
+      doc: ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan", "ChatGPT 요금제로 Codex 사용하기"], okMethod: { chatgpt: "ChatGPT 계정", api_key: "API 키" } },
+  };
+  const subBox = (p) => {
+    const g = SUB_GUIDE[p.name] || { tool: p.label, install: [], login: [], doc: ["#", ""], okMethod: {} };
+    const cc = p.status || {};
+    return h("div", { class: "card", style: "background:#0e1120;margin:8px 0 0" },
+      h("div", { class: "row" },
+        h("b", {}, `${g.tool} 상태`),
+        cc.installed ? h("span", { class: "badge ok" }, `설치됨 ${cc.version || ""}`) : h("span", { class: "badge pink" }, "설치 필요"),
+        cc.installed ? (cc.loggedIn ? h("span", { class: "badge ok" }, `로그인됨${g.okMethod[cc.authMethod] ? ` (${g.okMethod[cc.authMethod]})` : ""}`) : h("span", { class: "badge pink" }, "로그인 필요")) : null,
+        h("button", { class: "sm", onclick: async (e) => {
+          e.target.disabled = true; e.target.textContent = "확인 중…";
+          const r = await guard(() => POST(`/api/sub-status/${p.name}`));
+          if (r) p.status = r;
+          if (p.name === "claude-code" && r) S.state.claude_code = r;
+          render();
+        } }, "다시 확인")),
+      cc.installed && cc.loggedIn ? h("p", { class: "dim small", style: "margin:8px 0 0" }, "준비됐습니다. 사용량은 API 요금이 아니라 구독 사용 한도에서 차감됩니다.") :
+        h("ol", { class: "small", style: "margin:10px 0 0;padding-left:18px;line-height:1.9" },
+          h("li", {}, `${g.tool} 설치 – 터미널(맥) 또는 PowerShell(윈도우)에서:`,
+            h("div", { class: "mono", style: "background:#07090f;padding:6px 10px;border-radius:6px;margin:4px 0" }, g.install.flatMap((l, i) => i ? [h("br"), l] : [l]))),
+          h("li", {}, "로그인 – 터미널에서 ", ...g.login),
+          h("li", {}, "이 화면에서 ‘다시 확인’"),
+          h("li", { class: "dim" }, "자세한 안내: ", h("a", { href: g.doc[0], target: "_blank" }, g.doc[1]))));
+  };
 
   const provCard = h("div", { class: "card" },
     h("h3", {}, "1 · GM 을 맡길 AI"),
-    h("p", { class: "lead" }, "기본은 Claude 구독 계정입니다(API 키 불필요). API 키로 쓰려면 아래 ‘API 키로 연결’ 을 고르세요."),
-    sub ? h("div", { class: `choice ${useSub ? "sel" : ""}`, onclick: () => !useSub && pick(sub) },
-      h("b", {}, `⭐ ${sub.label}`), h("span", { class: "small" }, sub.hint)) : null,
-    useSub ? ccBox : null,
+    h("p", { class: "lead" }, "구독 계정으로 쓰면 API 키가 필요 없습니다. 기본은 Claude 구독 계정이고, ChatGPT 구독 계정도 쓸 수 있습니다. API 키로 쓰려면 아래 ‘API 키로 연결’ 을 고르세요."),
+    subs.map((p) => h("div", { style: "margin-bottom:8px" },
+      h("div", { class: `choice ${p.name === s.provider ? "sel" : ""}`, onclick: () => p.name !== s.provider && pick(p) },
+        h("b", {}, `⭐ ${p.label}`), h("span", { class: "small" }, p.hint)),
+      p.name === s.provider ? subBox(p) : null)),
     h("div", { class: "row", style: "margin-top:14px" },
       h("button", { class: `sm ${S.showApi ? "cyan" : "ghost"}`, onclick: () => { S.showApi = !S.showApi; render(); } },
         `${S.showApi ? "▾" : "▸"} API 키로 연결 (Claude API · GPT · Gemini · Ollama · 호환 API)`)),

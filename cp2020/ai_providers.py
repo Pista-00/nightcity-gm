@@ -2,6 +2,7 @@
 
 지원
 - claude-code : Claude 구독 계정(Pro·Max 등) – 내 컴퓨터에 설치·로그인한 Claude Code 를 통해 호출 (기본, 키 불필요)
+- chatgpt-codex : ChatGPT 계정 – 내 컴퓨터에 설치·로그인한 OpenAI Codex CLI 를 통해 호출 (키 불필요)
 - claude  : Anthropic Messages API (룰북 시스템 프롬프트에 프롬프트 캐싱 적용)
 - openai  : OpenAI Chat Completions API
 - gemini  : Google Gemini API (generateContent)
@@ -335,11 +336,128 @@ class ClaudeCode(Provider):
         return data.get("result", "")
 
 
-PROVIDERS = {cls.name: cls for cls in (ClaudeCode, Claude, OpenAI, Gemini, Ollama, Compat)}
+def _find_cli(name: str, env_var: str, extra: list[str]) -> str | None:
+    """CLI 실행 파일 찾기: 환경변수 → PATH → 흔한 설치 위치 → 로그인 셸 PATH."""
+    if os.environ.get(env_var):
+        return os.environ[env_var]
+    found = shutil.which(name)
+    if found:
+        return found
+    for c in extra:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    if os.name != "nt":
+        for sh in ("/bin/zsh", "/bin/bash"):
+            if os.path.exists(sh):
+                try:
+                    r = subprocess.run([sh, "-lic", f"command -v {name}"], capture_output=True, text=True, timeout=10)
+                    path = (r.stdout.strip().splitlines() or [""])[-1]
+                    if path.startswith("/") and os.path.isfile(path):
+                        return path
+                except Exception:  # noqa: BLE001
+                    pass
+    return None
+
+
+# ---------------------------------------------------------------- ChatGPT 구독 계정 (Codex CLI)
+class ChatGPTCodex(Provider):
+    """OpenAI Codex CLI 의 비대화형 모드(codex exec)를 호출한다.
+
+    - 인증은 사용자가 한 번 해 둔 `codex login`(ChatGPT 계정 로그인)을 그대로 쓴다. API 키 불필요.
+    - 빈 임시 폴더에서 읽기 전용 샌드박스·사용자 설정 무시·세션 저장 안 함으로 실행하고,
+      마지막 답변만 파일로 받아 온다.
+    """
+    name, kind, label = "chatgpt-codex", "subscription", "ChatGPT 구독 계정 (Codex 로그인)"
+    default_model = "default"
+    hint = "ChatGPT 계정으로 사용 – API 키 불필요 (사용량은 ChatGPT 요금제 한도에서 차감)"
+    MODELS = ["default"]          # default = Codex 기본 모델. 다른 모델은 이름을 직접 입력
+    _status_cache: tuple[float, dict] | None = None
+
+    @staticmethod
+    def binary():
+        home = os.path.expanduser("~")
+        return _find_cli("codex", "CODEX_BIN", [
+            "/opt/homebrew/bin/codex", "/usr/local/bin/codex", f"{home}/.npm-global/bin/codex",
+            f"{home}/.local/bin/codex", f"{home}/.bun/bin/codex",
+            os.path.join(os.environ.get("APPDATA", ""), "npm", "codex.cmd"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links", "codex.exe"),
+        ])
+
+    @classmethod
+    def _env(cls):
+        env = dict(os.environ)
+        env.pop("OPENAI_API_KEY", None)        # ChatGPT 로그인을 쓰도록
+        exe = cls.binary()
+        if exe:                                # npm 설치면 같은 폴더의 node 필요
+            env["PATH"] = os.path.dirname(exe) + os.pathsep + env.get("PATH", "")
+        return env
+
+    @classmethod
+    def status(cls, refresh=False) -> dict:
+        if cls._status_cache and not refresh and time.time() - cls._status_cache[0] < 60:
+            return cls._status_cache[1]
+        exe = cls.binary()
+        st = {"installed": bool(exe), "loggedIn": False, "authMethod": "", "version": ""}
+        if exe:
+            try:
+                v = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8",
+                                   timeout=30, env=cls._env())
+                st["version"] = v.stdout.strip().split("\n")[0]
+                a = subprocess.run([exe, "login", "status"], capture_output=True, text=True, encoding="utf-8",
+                                   timeout=30, env=cls._env())
+                text = (a.stdout + a.stderr).strip()
+                st["loggedIn"] = a.returncode == 0 and "not logged in" not in text.lower()
+                low = text.lower()
+                st["authMethod"] = "chatgpt" if "chatgpt" in low else ("api_key" if "api key" in low else "")
+                st["detail"] = text.splitlines()[0] if text else ""
+            except Exception as e:  # noqa: BLE001
+                st["error"] = str(e)[:200]
+        cls._status_cache = (time.time(), st)
+        return st
+
+    def missing(self):
+        st = self.status()
+        if not st["installed"]:
+            return ["Codex CLI 설치"]
+        if not st["loggedIn"]:
+            return ["Codex 로그인"]
+        return []
+
+    def list_models(self):
+        return list(self.MODELS)
+
+    def chat(self, system_blocks, messages):
+        exe = self.binary()
+        if not exe:
+            raise ProviderError("Codex CLI 가 설치되어 있지 않습니다.")
+        prompt = ("# 지시사항 (반드시 따를 것)\n" + self.join_system(system_blocks) +
+                  "\n\n# 중요\n파일을 읽거나 명령을 실행하지 말고, 위 지시에 따라 답변 텍스트만 출력하라.\n\n# 대화\n" +
+                  ClaudeCode._as_prompt(messages))
+        with tempfile.TemporaryDirectory(prefix="cp2020-gm-") as tmp:
+            out = os.path.join(tmp, "answer.txt")
+            cmd = [exe, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only",
+                   "--ignore-user-config", "--ignore-rules", "--color", "never", "-C", tmp, "-o", out]
+            if self.model and self.model != "default":
+                cmd += ["-m", self.model]
+            cmd.append("-")
+            try:
+                r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                                   cwd=tmp, timeout=600, env=self._env())
+            except subprocess.TimeoutExpired:
+                raise ProviderError("Codex 응답 시간 초과 (10분)") from None
+            answer = open(out, encoding="utf-8").read().strip() if os.path.exists(out) else ""
+        if r.returncode != 0 or not answer:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()[-5:]
+            raise ProviderError("Codex 오류: " + (" / ".join(tail) or f"종료 코드 {r.returncode}"))
+        return answer
+
+
+PROVIDERS = {cls.name: cls for cls in (ClaudeCode, ChatGPTCodex, Claude, OpenAI, Gemini, Ollama, Compat)}
 
 
 def describe() -> list[dict]:
     return [{"name": c.name, "kind": c.kind, "label": c.label, "default_model": c.default_model, "hint": c.hint,
+             "status": c.status() if c.kind == "subscription" else None,
              "needs": [{"key": k, "required": r, "label": credentials.LABELS.get(k, k),
                         "secret": k in credentials.SECRET, "set": bool(credentials.get(k))} for k, r in c.NEEDS]}
             for c in PROVIDERS.values()]

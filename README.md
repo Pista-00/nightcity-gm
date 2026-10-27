@@ -1,7 +1,7 @@
 # NightCity GM
 **Cyberpunk 2020 용 비공식 AI GM 도구** · 무료 팬 제작물
 
-내가 고른 AI(Claude 구독 계정 · Claude API · GPT · Gemini · 로컬 모델)가 GM 을 맡고,
+내가 고른 AI(Claude 구독 계정 · ChatGPT 구독 계정 · Claude API · GPT · Gemini · 로컬 모델)가 GM 을 맡고,
 한 화면에서 **연결 → 룰북 등록 → 인원 설정 → 캐릭터 생성 → 게임 진행**까지 할 수 있는 로컬 웹 앱입니다.
 플레이어들은 Notion 페이지로 장면(이미지 + 서술), 진행 기록, 캐릭터 시트를 함께 봅니다.
 
@@ -11,6 +11,7 @@
 ## 실행
 **필요한 것:** Python 3.10+, Cyberpunk 2020 코어 룰북 PDF(텍스트 검색 가능한 것), 그리고 다음 중 하나
 - 유료 Claude 구독(Pro·Max 등) + [Claude Code](https://code.claude.com/docs/en/setup) – 기본
+- 또는 ChatGPT 계정 + OpenAI Codex CLI (`npm i -g @openai/codex` → `codex login`) – [ChatGPT 요금제로 Codex 사용](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
 - 또는 Anthropic / OpenAI / Gemini API 키, Ollama, OpenAI 호환 API
 
 ```bash
@@ -24,7 +25,7 @@ cd nightcity-gm
 ## 화면 구성
 | 단계 | 하는 일 |
 |---|---|
-| ① AI · Notion 연결 | 기본은 Claude 구독 계정(Claude Code 로그인 상태 확인). `API 키로 연결` 에서 다른 AI 선택. Notion API 토큰 |
+| ① AI · Notion 연결 | 기본은 Claude 구독 계정(Claude Code 로그인), ChatGPT 구독 계정(Codex 로그인)도 선택 가능. `API 키로 연결` 에서 다른 AI 선택. Notion API 토큰 |
 | ② 룰북 등록 | 내 룰북 PDF 를 끌어다 놓거나 선택 → 내 컴퓨터에서 텍스트 추출·책 확인·색인 → AI 로 캐릭터 생성 표 만들기 → (선택) AI 정리본 |
 | ③ 캠페인 · 인원 | 캠페인 생성, 플레이어, 능력치 방식, 경험 수준, Notion 기록 페이지 |
 | ④ 캐릭터 생성 | 플레이어별 역할 → 능력치 → 커리어/픽업 스킬 → 라이프패스 → 자금·장비. 규칙 검사, AI 초안, 자동 임시 저장 |

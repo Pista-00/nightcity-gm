@@ -129,6 +129,14 @@ def claude_code_status():
     return jsonify(ai_providers.ClaudeCode.status(refresh=True))
 
 
+@app.post("/api/sub-status/<name>")
+def sub_status(name):
+    cls = ai_providers.PROVIDERS.get(name)
+    if not cls or cls.kind != "subscription":
+        abort(404)
+    return jsonify(cls.status(refresh=True))
+
+
 @app.get("/api/models")
 def models():
     p = ai_providers.create(request.args.get("provider", ""))
