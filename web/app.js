@@ -279,11 +279,38 @@ function jobLine(kind) {
   if (j.status === "error") return h("div", { class: "err small" }, `실패: ${j.error}`);
   return h("div", { class: "ok small" }, "✓ 완료");
 }
+async function uploadPdf(f) {
+  if (!f) return;
+  if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") return toast("PDF 파일만 등록할 수 있습니다.", "err");
+  if ((S.bookJobs || {}).import?.status === "running") return toast("이미 등록 중입니다.", "err");
+  if (S.state.book?.imported && !confirm(`'${f.name}' 으로 다시 등록할까요? 기존 색인을 새로 만듭니다.`)) return;
+  toast(`'${f.name}' 업로드 중… (${Math.round(f.size / 1048576)}MB)`);
+  const fd = new FormData(); fd.append("pdf", f);
+  const r = await fetch("/api/book/import", { method: "POST", headers: { "X-App-Token": TOKEN }, body: fd });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return toast(j.error || "업로드 실패", "err");
+  pollBook();
+}
+// 룰북 화면 밖에 떨어뜨려도 브라우저가 PDF 를 열어 버리지 않게
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  if (S.tab === "book") uploadPdf(e.dataTransfer?.files?.[0]);
+});
+
 function viewBook() {
   const b = S.state.book || {};
   const jobs = S.bookJobs || {};
   const busy = (k) => jobs[k]?.status === "running";
-  const file = h("input", { type: "file", accept: "application/pdf,.pdf" });
+  const file = h("input", { type: "file", accept: "application/pdf,.pdf", class: "hidden", onchange: (e) => uploadPdf(e.target.files[0]) });
+  const drop = h("div", { class: `dropzone ${busy("import") ? "busy" : ""}`, onclick: () => !busy("import") && file.click(),
+      ondragenter: (e) => { e.preventDefault(); e.currentTarget.classList.add("over"); },
+      ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add("over"); },
+      ondragleave: (e) => e.currentTarget.classList.remove("over"),
+      ondrop: (e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove("over"); uploadPdf(e.dataTransfer.files[0]); } },
+    h("div", { class: "dz-icon" }, "📄"),
+    h("b", {}, busy("import") ? "등록 중…" : b.imported ? "다른 PDF 로 다시 등록하려면 여기에 끌어다 놓기" : "룰북 PDF 를 여기에 끌어다 놓기"),
+    h("div", { class: "dim small" }, "또는 클릭해서 파일 선택"), file);
   return h("div", {},
     h("h2", {}, "룰북 등록"),
     h("p", { class: "lead" }, "이 앱에는 룰북 내용이 들어 있지 않습니다. 가지고 있는 Cyberpunk 2020 코어 룰북 PDF 를 등록하면, 이 컴퓨터 안에서만 GM 자료와 캐릭터 생성 표를 만듭니다. PDF 와 추출한 내용은 어디에도 업로드되지 않습니다."),
@@ -294,15 +321,7 @@ function viewBook() {
           h("p", {}, h("span", { class: "badge ok" }, "등록됨"), ` ${b.file} · ${b.pages}쪽`),
           h("p", { class: "dim small" }, `확인된 표지 ${b.markers.length}개 · ${String(b.imported_at).replace("T", " ")}`))
           : h("p", { class: "dim small" }, "텍스트가 들어 있는(검색 가능한) PDF 여야 합니다. 등록에 20~60초 정도 걸립니다."),
-        h("div", { class: "row" }, file,
-          h("button", { class: b.imported ? "" : "primary", disabled: busy("import"), onclick: async () => {
-            if (!file.files[0]) return toast("PDF 파일을 고르세요.", "err");
-            const fd = new FormData(); fd.append("pdf", file.files[0]);
-            const r = await fetch("/api/book/import", { method: "POST", headers: { "X-App-Token": TOKEN }, body: fd });
-            const j = await r.json().catch(() => ({}));
-            if (!r.ok) return toast(j.error || "업로드 실패", "err");
-            pollBook();
-          } }, b.imported ? "다른 PDF 로 다시 등록" : "등록")),
+        drop,
         jobLine("import")),
       h("div", { class: "card" },
         h("h3", {}, "2 · 캐릭터 생성 표 만들기"),

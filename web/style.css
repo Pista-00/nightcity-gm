@@ -214,3 +214,11 @@ body.hide-gm .gmnote { display: none; }
 .bar { height: 6px; background: #0e1120; border: 1px solid var(--line); border-radius: 99px; overflow: hidden; margin-bottom: 6px; }
 .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--pink), var(--cyan)); transition: width .4s; }
 .disclaimer { padding: 8px 18px; font-size: 11px; color: var(--dim); border-top: 1px solid var(--line); background: #0d0f18; }
+
+/* ---------- PDF drop zone */
+.dropzone { border: 2px dashed var(--line); border-radius: 10px; padding: 26px 16px; text-align: center; cursor: pointer;
+  background: #0e1120; transition: border-color .15s, background .15s; margin-top: 6px; }
+.dropzone:hover { border-color: var(--cyan); }
+.dropzone.over { border-color: var(--pink); background: #1c1022; }
+.dropzone.busy { cursor: progress; opacity: .7; }
+.dropzone .dz-icon { font-size: 28px; margin-bottom: 4px; }
