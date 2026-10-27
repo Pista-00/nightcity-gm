@@ -7,6 +7,7 @@
 이 서버는 내 컴퓨터(127.0.0.1)에서만 접속된다. 키는 브라우저로 다시 보내지 않는다.
 """
 import argparse
+import json
 import secrets
 import tempfile
 import threading
@@ -284,6 +285,12 @@ def book_chargen():
     return jsonify(start_job("chargen", lambda progress: book.extract_chargen(prov, progress)))
 
 
+@app.post("/api/book/gear")
+def book_gear():
+    prov = _provider_for_book()
+    return jsonify(start_job("gear", lambda progress: book.extract_gear(prov, progress)))
+
+
 @app.post("/api/book/summary")
 def book_summary():
     prov = _provider_for_book()
@@ -295,6 +302,22 @@ def book_forget():
     book.forget()
     JOBS.clear()
     return jsonify({"book": book.status()})
+
+
+def gear_catalog():
+    """장비·사이버웨어 목록: 등록한 룰북에서 만든 것(book/gear.json) 우선, 없으면 content/gear.json."""
+    for p in (store.ROOT / "book" / "gear.json", store.ROOT / "content" / "gear.json"):
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    return None
+
+
+@app.get("/api/gear")
+def gear():
+    cat = gear_catalog()
+    if not cat:
+        return jsonify({"ready": False})
+    return jsonify({"ready": True, **cat})
 
 
 @app.post("/api/chargen/roll_stats")

@@ -102,6 +102,10 @@ def validate(ch: dict, method: str, points: int = 75) -> list[str]:
     for sk, v in {**ch.get("career", {}), **ch.get("pickup", {})}.items():
         if int(v or 0) > 10:
             errs.append(f"{sk}: 시작 시 스킬은 최대 10 입니다.")
+    cash = (ch.get("money") or {}).get("cash")
+    spent = sum(int(i.get("cost") or 0) * int(i.get("qty") or 1) for i in ch.get("items", []))
+    if cash and spent > cash:
+        errs.append(f"장비·사이버웨어 예산 초과: {spent:,}eb 사용 / 시작 자금 {cash:,}eb")
     if not (ch.get("handle") or "").strip():
         errs.append("핸들(별명)을 입력하세요.")
     return errs

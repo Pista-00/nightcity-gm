@@ -23,6 +23,7 @@ META = BOOK / "book.json"
 PAGES = BOOK / "pages.json"
 INDEX = BOOK / "index.json"
 SUMMARY = BOOK / "reference.md"
+GEAR = BOOK / "gear.json"
 
 # 이 책이 맞는지 확인하는 표지 (대소문자 무시). 일정 개수 이상 있으면 통과.
 MARKERS = ["friday night firefight", "lifepath", "netrunn", "combat sense", "jury rig", "body type modifier",
@@ -52,12 +53,12 @@ def status() -> dict:
     m = meta()
     return {"imported": bool(m), "file": m.get("file", ""), "pages": m.get("pages", 0),
             "markers": m.get("markers", []), "imported_at": m.get("imported_at", ""),
-            "chargen": D.ready(), "summary": SUMMARY.exists(),
+            "chargen": D.ready(), "summary": SUMMARY.exists(), "gear": GEAR.exists(),
             "summary_parts": m.get("summary_parts", 0)}
 
 
 def forget():
-    for p in (META, PAGES, INDEX, SUMMARY, D.CHARGEN_FILE):
+    for p in (META, PAGES, INDEX, SUMMARY, D.CHARGEN_FILE, GEAR, GEAR.with_name("gear.partial.json")):
         if p.exists():
             p.unlink()
 
@@ -319,6 +320,83 @@ def extract_chargen(prov, progress=None) -> dict:
 
     D.CHARGEN_FILE.parent.mkdir(exist_ok=True)
     D.CHARGEN_FILE.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    step("완료", 1.0)
+    return status()
+
+
+# ---------------------------------------------------------------- AI 로 장비·사이버웨어 목록 추출
+GEAR_SCHEMA = {
+    "weapons": '{"name","group":"<분류 한국어 예: 중 자동권총>","type":"권총|기관단총|소총|샷건|중화기|근접|특수","skill":"<사용 스킬 영어>","wa","conceal","avail","damage","shots","rof","rel","range","cost":<숫자>,"cost_text"}',
+    "armor": '{"name","loc":"<보호 부위 한국어>","sp":<숫자>,"ev":"<숫자>","soft":<칼날에 약한 소프트 아머면 true>,"cost":<숫자>,"cost_text"}',
+    "gear": '{"name":"<한국어 이름>","group":"<분류 한국어: 도구/개인 전자/데이터/통신/감시/보안/의료/차량/패션/넷러닝/탄약>","cost":<숫자>,"cost_text","note":"<짧은 효과 한국어>"}',
+    "cyberware": '{"name":"<영어 이름>","group":"<분류 한국어: 패션웨어/뉴럴웨어/임플란트/바이오웨어/사이버무기/사이버옵틱/사이버옵틱 옵션/사이버오디오/사이버오디오 옵션/사이버림/사이버림 옵션/사이버림 손/사이버림 발/사이버림 내장/사이버림 무기/리니어 프레임/바디 플레이팅>","surgery":"N|M|MA|CR","cost":<숫자>,"cost_text","hl":"<휴머니티 손실: 주사위 식(예 2D6, 1D6/2) 또는 숫자>","effect":"<효과 한국어 한 줄>","requires":"<먼저 필요한 장치: Neural Processor / Cyberoptic / Cyberaudio / Cyberarm/Cyberleg 또는 빈칸>"}',
+}
+
+
+def _ask_list(prov, key, what, src, extra=""):
+    r = _ask_json(prov, f"""{what} 를 룰북 표에서 빠짐없이 옮겨 JSON 으로:
+{{"{key}": [{GEAR_SCHEMA[key]}, ...]}}
+cost 는 숫자(범위면 낮은 값, '/레벨' 등 단위는 cost_text 에), 없는 값은 "". 표에 있는 항목만. {extra}""", src)
+    return [x for x in (r.get(key) or []) if isinstance(x, dict) and x.get("name")]
+
+
+def extract_gear(prov, progress=None) -> dict:
+    if not PAGES.exists():
+        raise BookError("먼저 룰북 PDF 를 등록하세요.")
+    step = lambda msg, f: progress and progress(msg, f)  # noqa: E731
+    # 단계별 결과를 임시 저장 → 사용량 한도 등으로 끊겨도 다시 누르면 이어서 진행
+    part = GEAR.with_name("gear.partial.json")
+    out = json.loads(part.read_text(encoding="utf-8")) if part.exists() else {}
+
+    def run(key, msg, f, fn):
+        if key in out:
+            step(msg + " (이전 결과 사용)", f)
+            return
+        step(msg, f)
+        out[key] = fn()
+        part.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+
+    def weapons():
+        src = _pages_for({"rof": 3, "rel": 2, "conc": 3, "avail": 3, "kendachi": 5, "minami": 2, "avenger": 6, "smg": 2, "assault": 2},
+                         extra=1, limit_page=130, top=4, budget=50000)
+        return _ask_list(prov, "weapons", "무기 표(권총·SMG·소총·샷건·중화기·특수·근접 무기)", src)
+
+    def armor_src():
+        return _pages_for({"kevlar": 4, "armor jacket": 5, "flak": 5, "metalgear": 6, "ev": 1, "techscanner": 6, "medkit": 6,
+                           "mastoid": 6, "binoglasses": 6, "laptop": 3, "tech toolkit": 6}, extra=1, limit_page=130, top=5, budget=50000)
+
+    def cyber1():
+        src = _pages_for({"humanity cost": 4, "neural": 4, "kerenzikov": 6, "sandevistan": 6, "interface plugs": 6, "biomonitor": 6,
+                          "nasal": 5, "grafted muscle": 6, "skin weave": 6, "smartgun link": 6, "fashionware": 6, "implant": 3},
+                         extra=1, limit_page=130, top=6, budget=55000)
+        return _ask_list(prov, "cyberware", "사이버웨어 표 중 패션웨어·뉴럴웨어(링크·부스터·플러그·칩 소켓 포함)·임플란트·바이오웨어", src,
+                         "신경계 장치(링크·부스터·플러그·칩 소켓)는 requires 에 Neural Processor. Neural Processor 자체도 포함.")
+
+    def cyber2():
+        src = _pages_for({"cyberoptic": 5, "cyberaudio": 5, "cyberarm": 6, "cyberleg": 6, "wolvers": 6, "rippers": 4, "linear frame": 6,
+                          "body plating": 6, "hydraulic": 6, "talon": 5}, extra=1, limit_page=130, top=6, budget=55000)
+        return _ask_list(prov, "cyberware", "사이버웨어 표 중 사이버무기·사이버옵틱(+옵션)·사이버오디오(+옵션)·사이버림(+옵션·손·발·내장·림 무기)·리니어 프레임·바디 플레이팅", src,
+                         "옵틱 옵션은 requires Cyberoptic, 오디오 옵션은 Cyberaudio, 림 옵션·손·발·내장·림 무기는 Cyberarm/Cyberleg.")
+
+    run("weapons", "무기 표 추출 중", 0.05, weapons)
+    run("armor", "방어구 표 추출 중", 0.25, lambda: _ask_list(prov, "armor", "방어구 표", armor_src()))
+    run("gear", "장비 표 추출 중", 0.4, lambda: _ask_list(prov, "gear", "일반 장비 표(패션·도구·개인 전자·데이터·통신·감시·보안·의료·차량)",
+                                                      armor_src(), "가구·음식·주거·생활비·엔터테인먼트는 제외."))
+    run("cyber1", "사이버웨어 추출 중 (1/2)", 0.55, cyber1)
+    run("cyber2", "사이버웨어 추출 중 (2/2)", 0.75, cyber2)
+    cy = out.pop("cyber1") + out.pop("cyber2")
+    seen, out["cyberware"] = set(), []
+    for c in cy:
+        k = c["name"].lower()
+        if k not in seen:
+            seen.add(k)
+            out["cyberware"].append(c)
+    if len(out["weapons"]) < 15 or len(out["cyberware"]) < 40:
+        part.unlink(missing_ok=True)  # 결과가 부실하면 다음엔 처음부터
+        raise BookError(f"추출이 불완전합니다(무기 {len(out['weapons'])}개, 사이버웨어 {len(out['cyberware'])}개). 다시 시도하세요.")
+    out["notes"] = {"cyberware": "HL 주사위를 굴려 휴머니티 손실로 기록. 10 누적마다 EMP −1."}
+    GEAR.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    part.unlink(missing_ok=True)
     step("완료", 1.0)
     return status()
 
