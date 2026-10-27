@@ -630,7 +630,8 @@ function editor() {
       field("나이", h("input", { type: "number", value: d.age, min: 16, max: 80, oninput: (e) => (d.age = e.target.value) }))));
 
   // --- AI 도우미
-  const concept = h("textarea", { placeholder: "예) 아라사카에서 쫓겨난 전직 경호원. 과묵하고 의리 있음. 사이버암 하나." });
+  const concept = h("textarea", { placeholder: "예) 아라사카에서 쫓겨난 전직 경호원. 과묵하고 의리 있음. 사이버암 하나.",
+    oninput: (e) => { d.concept = e.target.value; markDirty(); } }, d.concept || "");
   const aiBox = h("div", { class: "card" }, h("h3", {}, "AI 도우미 (선택)"),
     h("p", { class: "dim small" }, "콘셉트를 적으면 AI 가 역할·능력치·스킬·장비 초안을 채웁니다. 결과는 아래에서 자유롭게 고치세요."),
     concept,
@@ -640,7 +641,7 @@ function editor() {
       const r = await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/chargen/ai`, { concept: concept.value, character: draftToChar(d) }));
       S.aiBusy = false;
       if (r) {
-        const keep = { id: d.id, player: d.player, stat_pool: d.stat_pool, lifepath: d.lifepath, money: d.money, status: d.status };
+        const keep = { id: d.id, player: d.player, concept: d.concept, stat_pool: d.stat_pool, lifepath: d.lifepath, money: d.money, status: d.status };
         S.draft = { ...draftFrom(r.character), ...Object.fromEntries(Object.entries(keep).filter(([, v]) => v)) };
         S.problems = r.problems;
         toast(r.problems.length ? "초안을 채웠습니다. 표시된 문제를 고쳐 주세요." : "초안을 채웠습니다.", "ok");
