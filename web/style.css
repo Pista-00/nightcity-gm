@@ -222,3 +222,14 @@ body.hide-gm .gmnote { display: none; }
 .dropzone.over { border-color: var(--pink); background: #1c1022; }
 .dropzone.busy { cursor: progress; opacity: .7; }
 .dropzone .dz-icon { font-size: 28px; margin-bottom: 4px; }
+
+/* ---------- AI 선택 (하나만, 펼침) */
+.aisel { border: 1px solid var(--line); border-radius: var(--radius); background: #0e1120; overflow: hidden; }
+.aisel-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; }
+.aisel-head:hover, .aisel-head.open { background: #161a2b; }
+.aisel-list { border-top: 1px solid var(--line); padding: 6px 8px 10px; max-height: 420px; overflow: auto; }
+.aisel-group { font-size: 11px; color: var(--cyan); letter-spacing: .05em; margin: 10px 6px 4px; }
+.aisel-opt { padding: 9px 10px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+.aisel-opt:hover { background: #161a2b; border-color: var(--line); }
+.aisel-opt.sel { border-color: var(--pink); background: #1c1022; }
+.aisel-head button { white-space: nowrap; flex-shrink: 0; }

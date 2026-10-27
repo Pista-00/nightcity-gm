@@ -87,7 +87,7 @@ function charsDone() {
 
 const bookReady = () => !!(S.state.book?.imported && S.state.book?.chargen);
 const STEPS = [
-  ["connect", "AI · Notion 연결", () => aiReady()],
+  ["connect", "AI 연결 · Notion(선택)", () => aiReady()],
   ["book", "룰북 등록", bookReady],
   ["campaign", "캠페인 · 인원", () => !!(S.camp && (S.camp.meta.players || []).length)],
   ["characters", "캐릭터 생성", charsDone],
@@ -112,8 +112,8 @@ function render() {
   $("#statusPills").replaceChildren(
     h("span", { class: `pill ${aiReady() ? "on" : "off"}`, onclick: () => go("connect") },
       aiReady() ? `AI: ${prov.kind === "subscription" ? (prov.name === "chatgpt-codex" ? "ChatGPT 구독" : "Claude 구독") : prov.label.split(" ")[0]} · ${s.model}` : "AI 미연결"),
-    h("span", { class: `pill ${notionTokenSet() && S.camp?.notion_ready ? "on" : "off"}`, onclick: () => go(notionTokenSet() ? "campaign" : "connect") },
-      notionTokenSet() ? (S.camp?.notion_ready ? "Notion 연결됨" : "Notion 페이지 미지정") : "Notion 미연결"));
+    h("span", { class: `pill ${notionTokenSet() && S.camp?.notion_ready ? "on" : ""}`, onclick: () => go(notionTokenSet() ? "campaign" : "connect") },
+      notionTokenSet() ? (S.camp?.notion_ready ? "Notion 연결됨" : "Notion 페이지 미지정 (선택)") : "Notion 사용 안 함 (선택)"));
   // steps
   $("#steps").replaceChildren(...STEPS.map(([id, label, done], i) =>
     h("div", { class: `step ${S.tab === id ? "active" : ""} ${done() ? "done" : ""}`, onclick: () => go(id) },
@@ -186,17 +186,32 @@ function viewConnect() {
 
   const provCard = h("div", { class: "card" },
     h("h3", {}, "1 · GM 을 맡길 AI"),
-    h("p", { class: "lead" }, "구독 계정으로 쓰면 API 키가 필요 없습니다. 기본은 Claude 구독 계정이고, ChatGPT 구독 계정도 쓸 수 있습니다. API 키로 쓰려면 아래 ‘API 키로 연결’ 을 고르세요."),
-    subs.map((p) => h("div", { style: "margin-bottom:8px" },
-      h("div", { class: `choice ${p.name === s.provider ? "sel" : ""}`, onclick: () => p.name !== s.provider && pick(p) },
-        h("b", {}, `⭐ ${p.label}`), h("span", { class: "small" }, p.hint)),
-      p.name === s.provider ? subBox(p) : null)),
-    h("div", { class: "row", style: "margin-top:14px" },
-      h("button", { class: `sm ${S.showApi ? "cyan" : "ghost"}`, onclick: () => { S.showApi = !S.showApi; render(); } },
-        `${S.showApi ? "▾" : "▸"} API 키로 연결 (Claude API · GPT · Gemini · Ollama · 호환 API)`)),
-    S.showApi ? h("div", { class: "choice-grid", style: "margin-top:10px" }, apis.map((p) =>
-      h("div", { class: `choice ${p.name === s.provider ? "sel" : ""}`, onclick: () => pick(p) },
-        h("b", {}, p.label), h("span", { class: "small" }, p.hint)))) : null,
+    h("p", { class: "lead" }, "GM 을 맡길 AI 를 하나 고르세요. 구독 계정(Claude · ChatGPT)은 API 키 없이 로그인만으로 쓸 수 있습니다."),
+    (() => {
+      if (S.aiOpen === undefined) S.aiOpen = !cur;
+      const badge = (p) => {
+        if (p.kind !== "subscription") return h("span", { class: "badge" }, "API 키");
+        const st = p.status || {};
+        return st.installed && st.loggedIn ? h("span", { class: "badge ok" }, "로그인됨") : h("span", { class: "badge pink" }, st.installed ? "로그인 필요" : "설치 필요");
+      };
+      const opt = (p) => h("div", { class: `aisel-opt ${p.name === s.provider ? "sel" : ""}`, onclick: async () => {
+          S.aiOpen = false;
+          if (p.name !== s.provider) await pick(p); else render();
+        } },
+        h("div", { class: "row" }, h("b", {}, `${p.kind === "subscription" ? "⭐ " : ""}${p.label}`), badge(p)),
+        h("div", { class: "small dim" }, p.hint));
+      return h("div", { class: "aisel" },
+        h("div", { class: `aisel-head ${S.aiOpen ? "open" : ""}`, onclick: () => { S.aiOpen = !S.aiOpen; render(); } },
+          cur ? h("div", {}, h("div", { class: "row" }, h("b", {}, `${cur.kind === "subscription" ? "⭐ " : ""}${cur.label}`), badge(cur)),
+                  h("div", { class: "small dim" }, cur.hint))
+              : h("b", { class: "dim" }, "AI 를 고르세요"),
+          h("span", { style: "flex:1" }),
+          h("button", { class: "sm" }, S.aiOpen ? "▲ 닫기" : "▼ 다른 AI 선택")),
+        S.aiOpen ? h("div", { class: "aisel-list" },
+          h("div", { class: "aisel-group" }, "구독 계정 – API 키 불필요"), subs.map(opt),
+          h("div", { class: "aisel-group" }, "API 키로 연결"), apis.map(opt)) : null);
+    })(),
+    useSub ? subBox(cur) : null,
     cur ? h("div", { style: "margin-top:16px" },
       cur.needs.map((n) => {
         const inp = h("input", { type: n.secret ? "password" : "text", class: "wide", autocomplete: "off",
@@ -243,13 +258,13 @@ function viewConnect() {
   const nTok = h("input", { type: "password", class: "wide", autocomplete: "off", placeholder: notionTokenSet() ? "설정됨 – 바꾸려면 새로 입력" : "ntn_… / secret_…" });
   const nPersist = h("input", { type: "checkbox", checked: true });
   const notionCard = h("div", { class: "card" },
-    h("h3", {}, "2 · Notion (플레이 기록 공유)"),
-    h("p", { class: "lead" }, "플레이어들이 볼 기록이 Notion 에 쌓입니다. 장면(이미지+서술), 캐릭터 시트, 세션 요약만 올라가고 룰북·GM 메모는 올라가지 않습니다. 기존 내용은 수정하지 않고 추가만 합니다."),
+    h("h3", {}, "2 · Notion 연결 (선택)"),
+    h("p", { class: "lead" }, "필수가 아닙니다. 연결하지 않아도 게임은 그대로 진행되고 기록은 이 컴퓨터에 저장됩니다. 연결하면 플레이어들이 볼 기록이 Notion 에 쌓입니다. 장면(이미지+서술), 캐릭터 시트, 세션 요약만 올라가고 룰북·GM 메모는 올라가지 않습니다. 기존 내용은 수정하지 않고 추가만 합니다."),
     h("ol", { class: "dim small" },
       h("li", {}, h("a", { href: "https://app.notion.com/developers/connections", target: "_blank" }, "Notion 개발자 포털"), " → Internal connections → Create a new connection → Configuration 탭에서 API 토큰 복사 (워크스페이스 소유자만 가능)"),
       h("li", {}, "기록할 Notion 페이지의 ··· → Connections(연결) → + Add connection 에서 방금 만든 연결 추가"),
       h("li", {}, "그 페이지 URL 은 ② 캠페인 화면에서 입력")),
-    field(`Notion API 토큰${notionTokenSet() ? " ✓" : ""}`, nTok),
+    field(`Notion API 토큰 (선택)${notionTokenSet() ? " ✓" : ""}`, nTok),
     h("div", { class: "row" },
       h("label", { class: "check" }, nPersist, "이 컴퓨터에 저장"),
       h("button", { class: "cyan", onclick: async () => {
@@ -257,19 +272,20 @@ function viewConnect() {
           await guard(() => POST("/api/keys", { keys: { NOTION_TOKEN: nTok.value.trim() }, persist: nPersist.checked }), "저장했습니다.");
           await load(); render();
         } }, "토큰 저장")),
-    h("div", { class: "row" }, field("장면을 Notion 에 기록하는 방식", select([["always", "장면이 바뀌면 자동으로 (추천)"], ["ask", "장면마다 버튼으로"], ["never", "기록하지 않음"]], s.notion_mode, async (v) => {
+    h("div", { class: "row" }, field("장면을 Notion 에 기록하는 방식 (선택)", select([["always", "장면이 바뀌면 자동으로 (추천)"], ["ask", "장면마다 버튼으로"], ["never", "기록하지 않음"]], s.notion_mode, async (v) => {
       await guard(() => POST("/api/ai", { notion_mode: v })); await load(); }))));
 
   const dangerCard = h("div", { class: "card" },
     h("h3", {}, "저장된 키"),
     h("div", { class: "dim small" }, Object.entries(S.state.credentials).filter(([, v]) => v).map(([k, v]) => `${k} (${{ memory: "이번 실행에만", env: "환경변수", file: ".env.local" }[v]})`).join(" · ") || "없음"),
+    h("p", { class: "dim small", style: "margin:6px 0 0" }, "API 키·Notion 토큰처럼 이 앱에 입력한 값만 표시됩니다. 구독 계정(Claude · ChatGPT)은 키 없이 각 도구의 로그인으로 동작하므로 여기 나오지 않습니다. 저장 위치는 이 폴더의 .env.local 이라 다른 폴더에서 실행하면 따로 입력해야 합니다."),
     h("div", { class: "row", style: "margin-top:10px" }, h("button", { class: "danger", onclick: async () => {
       if (!confirm("이 컴퓨터에 저장된 키를 모두 지울까요? (환경변수는 지워지지 않음)")) return;
       await guard(() => POST("/api/keys/forget", {}), "삭제했습니다."); await load(); render();
     } }, "저장된 키 모두 삭제")));
 
   return h("div", {},
-    h("h2", {}, "AI · Notion 연결"), h("p", { class: "lead" }, "한 번만 설정하면 됩니다. 다 되면 ② 캠페인으로 넘어가세요."),
+    h("h2", {}, "AI 연결 · Notion (선택)"), h("p", { class: "lead" }, "한 번만 설정하면 됩니다. 필수는 AI 하나뿐이고 Notion 은 선택입니다."),
     h("div", { class: "grid2" }, provCard, h("div", {}, notionCard, dangerCard)),
     h("div", { class: "row" }, h("button", { class: "primary", disabled: !aiReady(), onclick: () => go("campaign") }, "다음: 캠페인 · 인원 →")));
 }
@@ -371,7 +387,7 @@ function viewCampaign() {
   const page = h("input", { type: "url", class: "wide", placeholder: "https://www.notion.so/… (나중에 넣어도 됨)" });
   const create = h("div", { class: "card" },
     h("h3", {}, "새 캠페인"),
-    field("캠페인 이름", name), field("Notion 기록 페이지 URL", page),
+    field("캠페인 이름", name), field("Notion 기록 페이지 URL (선택)", page),
     h("button", { class: "primary", onclick: async () => {
       const r = await guard(() => POST("/api/campaigns", { name: name.value, notion_page: page.value }), "캠페인을 만들었습니다.");
       if (r) { S.camp = r; await load(); render(); }
@@ -424,7 +440,7 @@ function viewCampaign() {
         field("캠페인 메모 (AI GM 참고)", premise)),
       h("div", {},
         h("div", { class: "card" }, h("h3", {}, "능력치 결정 방식"), methodBox),
-        h("div", { class: "card" }, h("h3", {}, "Notion 기록 페이지"),
+        h("div", { class: "card" }, h("h3", {}, "Notion 기록 페이지 (선택)"),
           field("페이지 URL", notionPage), h("div", { class: "row" },
             h("button", { class: "sm", onclick: async () => {
               if (!notionTokenSet()) return toast("먼저 ① 에서 Notion 토큰을 저장하세요.", "err");
@@ -738,7 +754,7 @@ function editor() {
     render();
   };
   const actions = h("div", { class: "sticky-actions" }, problemsBox, h("span", { style: "flex:1" }),
-    S.camp.notion_ready ? h("label", { class: "check" }, notionChk, "Notion 에 시트 기록") : null,
+    S.camp.notion_ready ? h("label", { class: "check" }, notionChk, "Notion 에 시트 기록 (선택)") : null,
     h("button", { class: "primary", onclick: () => doSave(false) }, "저장"),
     h("button", { class: "ghost", onclick: () => doSave(true) }, "그래도 저장"),
     (S.camp.drafts || {})[draftKey(d)] && S.camp.characters.some((c) => c.id === d.id) ? h("button", { class: "sm ghost", onclick: async () => {
@@ -816,7 +832,7 @@ function sceneCard(seg) {
       h("div", { class: "narr" }, seg.narration),
       h("div", { class: "acts" },
         sent ? h("span", { class: "badge ok" }, "Notion 기록됨") :
-          h("button", { class: "sm cyan", disabled: !S.camp.notion_ready, title: S.camp.notion_ready ? "" : "Notion 연결 필요", onclick: () => sendScene(seg.id) }, "Notion 에 기록"),
+          (S.camp.notion_ready ? h("button", { class: "sm cyan", onclick: () => sendScene(seg.id) }, "Notion 에 기록") : null),
         seg.image ? h("span", { class: "dim small" }, `🖼 ${seg.image}`) : null)));
 }
 
@@ -1098,9 +1114,9 @@ function viewPlay() {
       h("div", { class: "dim small" }, [cur.location, cur.time].filter(Boolean).join(" · ")),
       h("div", { class: "cur-narr" }, cur.narration),
       h("div", { style: "margin-top:8px" }, S.play.sent.has(cur.id) ? h("span", { class: "badge ok" }, "Notion 기록됨") :
-        h("button", { class: "sm cyan", disabled: !S.camp.notion_ready, onclick: () => sendScene(cur.id) }, "이 장면 Notion 에 기록")))
+        (S.camp.notion_ready ? h("button", { class: "sm cyan", onclick: () => sendScene(cur.id) }, "이 장면 Notion 에 기록") : null)))
       : h("div", { class: "noimg" }, "아직 장면이 없습니다. GM 이 장면을 열면 여기에 그 장면의 이미지가 표시됩니다."),
-    h("h3", { style: "margin-top:22px" }, "📝 Notion 진행 기록"),
+    h("h3", { style: "margin-top:22px" }, "📝 Notion 진행 기록 (선택)"),
     S.camp.notion_ready ? h("div", { class: "card", style: "padding:12px" },
       h("p", { class: "small", style: "margin:0 0 8px" }, auto
         ? "장면이 바뀔 때마다 그 전까지의 행동·대화·판정·결과를 AI 가 요약해 Notion 에 자동 기록합니다."
@@ -1113,7 +1129,7 @@ function viewPlay() {
           if (r) { toast(r.logged ? "진행 기록을 Notion 에 추가했습니다." : "기록할 내용이 없습니다.", r.logged ? "ok" : ""); S.play.unlogged = r.unlogged; }
           render();
         } }, "지금 요약해서 기록")))
-      : h("p", { class: "dim small" }, "Notion 이 연결되지 않았습니다. ② 캠페인 화면에서 페이지를 지정하세요."),
+      : h("p", { class: "dim small" }, "선택 기능입니다. 연결하지 않아도 게임은 그대로 진행되고 기록은 이 컴퓨터(campaigns 폴더)에 저장됩니다."),
     h("h3", { style: "margin-top:22px" }, "🔒 GM 메모"),
     gmNotes.length ? gmNotes.map((n) => h("div", { class: "gmnote" }, n)) : h("p", { class: "dim small" }, "없음"),
     h("h3", { style: "margin-top:22px" }, "세션 메모"),
