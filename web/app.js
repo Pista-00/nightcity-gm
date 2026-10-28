@@ -1176,7 +1176,7 @@ function renderItem(it) {
           `🎲 판정 요청 · ${s.who || "?"}: ${s.stat}${s.skill ? ` + ${s.skill}` : ""} + 1D10${s.diff ? ` · 난이도 ${s.diff}` : ""}${s.why ? ` — ${s.why}` : ""}`));
       }
       if (s.kind === "rollreq") return h("div", {}, h("span", { class: "rollreq" }, `🎲 GM 굴림 요청 · ${s.expr}  ${s.why}`));
-      if (s.kind === "gm") return h("div", { class: "gmnote" }, "🔒 GM 메모: ", s.text);
+      if (s.kind === "gm") return null;   // GM 메모는 오른쪽 패널에만 표시
       return h("div", { class: "text", html: md(s.text) });
     }));
 }
@@ -1426,7 +1426,7 @@ function viewPlay() {
 
   // right side – 지금 장면만 + Notion 진행 기록
   const cur = lastScene();
-  const gmNotes = S.play.log.flatMap((i) => (i.segments || []).filter((s) => s.kind === "gm").map((s) => s.text)).slice(-8).reverse();
+  const gmNotes = S.play.log.flatMap((i) => (i.segments || []).filter((s) => s.kind === "gm").map((s) => s.text)).reverse();   // 최신이 위
   const auto = S.state.settings.notion_mode === "always";
   const unlogged = S.play.unlogged;
   const side = h("section", { class: "side" },
@@ -1454,7 +1454,7 @@ function viewPlay() {
           render();
         } }, "지금 요약해서 기록")))
       : h("p", { class: "dim small" }, "선택 기능입니다. 연결하지 않아도 게임은 그대로 진행되고 기록은 이 컴퓨터(campaigns 폴더)에 저장됩니다."),
-    h("h3", { style: "margin-top:22px" }, "🔒 GM 메모"),
+    h("h3", { style: "margin-top:22px" }, "🔒 GM 메모", gmNotes.length ? h("span", { class: "dim small" }, ` ${gmNotes.length}개 · 최신이 위`) : null),
     gmNotes.length ? gmNotes.map((n) => h("div", { class: "gmnote" }, n)) : h("p", { class: "dim small" }, "없음"),
     h("h3", { style: "margin-top:22px" }, "세션 메모"),
     (() => { const inp = h("input", { type: "text", class: "wide", placeholder: "세션 기록에 한 줄 추가 (플레이어 공개)" });
