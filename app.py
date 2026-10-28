@@ -350,6 +350,97 @@ def gear():
         return jsonify({"ready": False})
     return jsonify({"ready": True, **cat})
 
+# ---------------------------------------------------------------- 장비 자동 장착(AI 추천)
+GEAR_TAGS = {"weapons": "무기", "armor": "방어구", "gear": "장비", "cyberware": "사이버"}
+
+
+def _gear_lines(cat: dict) -> str:
+    out = []
+    for tab, tag in GEAR_TAGS.items():
+        for x in cat.get(tab) or []:
+            if tab == "weapons":
+                extra = f"{x.get('type', '')} 피해 {x.get('damage', '')} 스킬 {x.get('skill', '')} 은닉 {x.get('conceal', '')}"
+            elif tab == "armor":
+                extra = f"SP {x.get('sp', '')} {x.get('loc', '')} EV {x.get('ev', '')}"
+            elif tab == "gear":
+                extra = f"{x.get('group', '')} {x.get('note', '')}"
+            else:
+                extra = f"{x.get('group', '')} HL {x.get('hl', '')}{' 필요:' + x['requires'] if x.get('requires') else ''} {x.get('effect', '')}"
+            out.append(f"{tag}|{x['name']}|{x.get('cost') or 0}eb|{' '.join(extra.split())[:90]}")
+    return "\n".join(out)
+
+
+@app.post("/api/campaign/<cid>/gear/suggest")
+def gear_suggest(cid):
+    """캐릭터의 역할·출신·라이프패스·스킬에 맞는 장비를 AI 가 목록에서 골라 줌(남은 예산 안)."""
+    campaign(cid)
+    cat = gear_catalog()
+    if not cat:
+        abort(409, "장비 목록이 없습니다.")
+    b = body()
+    ch = b.get("character") or {}
+    budget = int(b.get("budget") or 0)
+    have = [str(i.get("name", "")) for i in b.get("items") or []]
+    if budget <= 0:
+        abort(400, "남은 돈이 없습니다. 시작 자금을 먼저 굴리세요.")
+    s = store.settings()
+    prov = ai_providers.create(s.get("provider") or "claude-code", s.get("model", ""), max_tokens=3000)
+    if prov.missing() or not prov.model:
+        abort(400, "먼저 ① 에서 AI 를 연결하세요.")
+    info = {k: ch.get(k) for k in ("handle", "name", "age", "role", "stats", "career", "pickup", "lifepath", "concept", "notes") if ch.get(k)}
+    prompt = f"""이 사이버펑크 2020 캐릭터에게 맞는 시작 장비를 [장비 목록]에서 골라라.
+
+[캐릭터]
+{json.dumps(info, ensure_ascii=False)}
+[이미 가진 것] {', '.join(have) or '없음'}
+[쓸 수 있는 돈] {budget}eb
+
+기준
+- 역할(하는 일)에 필요한 도구, 높은 스킬을 살리는 무기(예: Handgun 높으면 권총, Rifle 이면 소총), 방어구 하나.
+- 출신·가족·라이프패스·성격·콘셉트에 어울리는 물건(예: 노매드 출신이면 거친 야외 장비, 기업 출신이면 깔끔한 정장·셀폰).
+- 사이버웨어는 역할에 꼭 맞는 것 0~3개, 휴머니티 손실 합이 EMP×3 를 넘지 않게. '필요:' 가 있으면 그 선행 장치도 함께 고르고 선행 장치를 먼저 적는다.
+- 가격 합계가 {budget}eb 를 넘지 않게, 현금을 조금 남긴다. 이미 가진 것은 다시 고르지 않는다.
+- name 은 목록의 이름을 글자 그대로. why 는 이 캐릭터에게 왜 맞는지 한국어 한 줄.
+
+JSON 하나만 출력: {{"items": [{{"name": "", "qty": 1, "why": ""}}], "summary": "<전체 구성 한국어 한두 문장>"}}"""
+    reply = prov.chat([("너는 사이버펑크 2020 장비 담당 픽서다. 요청한 JSON 만 출력한다. 목록에 없는 물건은 고르지 않는다.", False),
+                       ("# 장비 목록 (분류|이름|가격|정보)\n" + _gear_lines(cat), True)],
+                      [{"role": "user", "content": prompt}])
+    m = re.search(r"\{.*\}", reply or "", re.S)
+    try:
+        r = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        r = {}
+    if not isinstance(r.get("items"), list):
+        abort(502, "AI 응답을 읽지 못했습니다. 다시 눌러 주세요.")
+    norm = lambda t: re.sub(r"\s+", " ", str(t or "")).strip().lower()  # noqa: E731
+    index = {}
+    for tab in GEAR_TAGS:
+        for x in cat.get(tab) or []:
+            index.setdefault(norm(x["name"]), (tab, x))
+    seen, total, out, skipped = {norm(n) for n in have}, 0, [], []
+    for e in r["items"]:
+        if not isinstance(e, dict):
+            continue
+        key = norm(e.get("name"))
+        hit = index.get(key) or next((v for k, v in index.items() if key and (k.startswith(key) or key.startswith(k))), None)
+        if not hit:
+            skipped.append(f"{e.get('name')}(목록에 없음)")
+            continue
+        tab, x = hit
+        if norm(x["name"]) in seen:
+            continue
+        qty = max(1, min(int(e.get("qty") or 1), 20)) if tab == "gear" else 1
+        cost = int(x.get("cost") or 0) * qty
+        if total + cost > budget:
+            skipped.append(f"{x['name']}(예산 초과)")
+            continue
+        seen.add(norm(x["name"]))
+        total += cost
+        out.append({"tab": tab, "item": x, "qty": qty, "why": str(e.get("why") or "")[:200]})
+    return jsonify({"items": out, "total": total, "summary": str(r.get("summary") or ""), "skipped": skipped})
+
+
 
 @app.post("/api/chargen/roll_stats")
 def roll_stats():

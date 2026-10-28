@@ -624,6 +624,165 @@ function viewCharacters() {
     S.draft ? editor() : h("div", { class: "card dim" }, "위의 ‘▼ 플레이어 선택’ 에서 캐릭터를 만들거나 고칠 플레이어를 고르세요."));
 }
 
+// ------------------------------------------------------------------ 장비: 선행 장치 · 직업 필수 장비 · AI 자동 장착
+const GEAR_KIND = { weapons: "weapon", armor: "armor", gear: "gear", cyberware: "cyber" };
+const SURG = { N: "간단 시술", M: "소수술", MA: "대수술", CR: "중대 수술" };
+function gearInfo(tab, x) {
+  return tab === "weapons" ? [x.type, `피해 ${x.damage}`, x.shots && `장탄 ${x.shots}`, x.rof && `ROF ${x.rof}`, `WA ${x.wa}`, x.range, x.rel && `신뢰 ${x.rel}`].filter(Boolean).join(" · ")
+    : tab === "armor" ? `${x.loc} · SP ${x.sp} · EV ${x.ev}${x.soft ? " · 칼날엔 SP 절반" : ""}`
+    : tab === "cyberware" ? [`HL ${x.hl}`, SURG[x.surgery], x.effect].filter(Boolean).join(" · ") : (x.note || "");
+}
+const lc = (t) => String(t || "").trim().toLowerCase();
+function catalogFind(name) {
+  const G = S.gearCat;
+  if (!G?.ready) return null;
+  for (const tab of Object.keys(GEAR_KIND)) {
+    const x = (G[tab] || []).find((c) => lc(c.name) === lc(name));
+    if (x) return { tab, x };
+  }
+  return null;
+}
+// 선행 장치: "Neural Processor", "Cyberoptic", "Cyberaudio", "Cyberarm/Cyberleg" – 이름이 그 단어로 시작하는 장비가 있으면 충족
+const reqOfItem = (it) => (it.kind === "cyber" ? (it.requires ?? catalogFind(it.name)?.x.requires ?? "") : "");
+const reqParts = (req) => String(req || "").split("/").map((s) => s.trim()).filter(Boolean);
+const reqRe = (p) => new RegExp("^\\s*" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+const reqMet = (items, req) => !req || items.some((i) => reqParts(req).some((p) => reqRe(p).test(i.name)));
+const prereqCandidates = (req) => (S.gearCat?.cyberware || []).filter((c) => !c.requires && reqParts(req).some((p) => reqRe(p).test(c.name)));
+const itemsSpent = (d) => (d.items || []).reduce((a, i) => a + (+i.cost || 0) * (+i.qty || 1), 0);
+function prereqCost(d, tab, x) {
+  if (tab !== "cyberware" || !x.requires || reqMet(d.items, x.requires)) return 0;
+  const c = prereqCandidates(x.requires);
+  return c.length === 1 ? +c[0].cost || 0 : Infinity;
+}
+// it 을 빼면 요건이 깨지는 장비들(연쇄 포함)
+function dependentsOf(d, it) {
+  const gone = new Set([it]);
+  for (let changed = true; changed;) {
+    changed = false;
+    const rest = d.items.filter((i) => !gone.has(i));
+    for (const i of rest) {
+      const req = reqOfItem(i);
+      if (req && !reqMet(rest.filter((r) => r !== i), req)) { gone.add(i); changed = true; }
+    }
+  }
+  gone.delete(it);
+  return [...gone];
+}
+async function rollHL(item, dice) {
+  if (/d/i.test(String(dice))) {
+    const r = await guard(() => POST("/api/roll", { expr: String(dice).toUpperCase() }));
+    if (r) { item.hl = r.total; item.hl_roll = `${dice} → ${r.total}`; }
+  } else { item.hl = parseFloat(dice) || 0; item.hl_roll = `고정 ${item.hl}`; }
+}
+// 목록의 항목 장착. 선행 장치가 없으면: 수동 → 함께 장착할지 물음 / 자동(auto) → 선행 장치도 자동 장착. 장착 못 하면 null.
+async function addCatalogItem(d, tab, x, opts = {}) {
+  if (tab === "cyberware" && x.requires && !reqMet(d.items, x.requires)) {
+    const c = prereqCandidates(x.requires);
+    if (c.length !== 1) {
+      if (!opts.auto) toast(`${x.name} 을(를) 장착하려면 먼저 ${x.requires} 를 장착하세요.`, "err");
+      return null;
+    }
+    const pre = c[0];
+    if (!opts.auto && !confirm(`${x.name} 을(를) 장착하려면 ${pre.name}(${(+pre.cost || 0).toLocaleString()}eb)이(가) 먼저 있어야 합니다.\n함께 장착할까요?`)) {
+      toast(`${x.name}: 선행 장치가 없어 장착하지 않았습니다.`, "err");
+      return null;
+    }
+    if (!(await addCatalogItem(d, "cyberware", pre, { auto: opts.auto, why: `${x.name} 의 선행 장치` }))) return null;
+  }
+  const it = { kind: GEAR_KIND[tab], name: x.name, cost: +x.cost || 0, qty: opts.qty || 1, info: gearInfo(tab, x), cost_text: x.cost_text,
+    requires: x.requires || "" };
+  if (opts.why) it.why = opts.why;
+  if (opts.essential) it.essential = opts.essential;
+  if (opts.auto) it.auto = opts.auto;
+  if (tab === "cyberware") { it.hl_dice = x.hl; await rollHL(it, x.hl); }
+  d.items.push(it);
+  return it;
+}
+function removeItem(d, it) {
+  if (it.essential) return toast(`${it.name} 은(는) ${S.cg.roles[it.essential]?.ko || it.essential} 의 필수 장비입니다. 직업을 바꾸면 자동으로 바뀝니다.`, "err");
+  const deps = dependentsOf(d, it);
+  const ess = deps.find((x) => x.essential);
+  if (ess) return toast(`직업 필수 장비 ${ess.name} 이(가) ${it.name} 을(를) 필요로 해서 뺄 수 없습니다.`, "err");
+  if (deps.length && !confirm(`${it.name} 을(를) 빼면 이것이 있어야 하는 장비도 함께 해제됩니다:\n${deps.map((x) => "· " + x.name).join("\n")}\n계속할까요?`)) return;
+  d.items = d.items.filter((i) => i !== it && !deps.includes(i));
+  if (deps.length) toast(`${it.name} 과(와) 연결된 ${deps.length}개를 함께 해제했습니다.`, "ok");
+  markDirty(); render(); recheck(render);
+}
+// 직업 필수 장비 – 특수능력을 쓰려면 있어야 하는 도구만. 목록 이름이 책마다 달라서 여러 패턴으로 찾고, 맞는 것 중 가장 싼 것.
+const ROLE_ESSENTIALS = {
+  netrunner: [{ tab: "cyberware", pats: [/^neural processor/i] }, { tab: "cyberware", pats: [/^interface plug/i] },
+    { tab: "gear", pats: [/(cyber ?deck|사이버덱).*(중고|used)/i, /cyber ?deck|사이버덱/i] }],
+  techie: [{ tab: "gear", pats: [/tech ?tool ?kit|테크 ?툴 ?킷/i, /tool ?kit|툴 ?킷/i] }],
+  medtechie: [{ tab: "gear", pats: [/med ?kit|메드 ?킷/i, /medtech|first ?aid|구급/i] }],
+  media: [{ tab: "gear", pats: [/digital recorder|디지털 ?레코더/i, /recorder|레코더|minicam|camera|카메라|video ?cam|비디오캠/i] }],
+  rockerboy: [{ tab: "gear", pats: [/electric guitar|일렉 ?기타/i, /guitar|keyboard|키보드|synth|신스/i] }],
+};
+function essentialSpecs(role) {
+  const k = String(role || "").toLowerCase().replace(/[^a-z]/g, "");
+  return ROLE_ESSENTIALS[k] || ROLE_ESSENTIALS[{ medtech: "medtechie", rocker: "rockerboy" }[k]] || [];
+}
+function findEssential(spec) {
+  const list = S.gearCat?.[spec.tab] || [];
+  for (const re of spec.pats) {
+    const m = list.filter((x) => re.test(x.name));
+    if (m.length) return m.sort((a, b) => (+a.cost || 0) - (+b.cost || 0))[0];
+  }
+  return null;
+}
+const essentialPreview = (role) => essentialSpecs(role).map(findEssential).filter(Boolean);
+// 역할이 바뀌면(처음 정할 때 포함) 이전 직업의 필수 장비를 빼고 새 직업의 필수 장비를 장착
+async function syncEssentials(d) {
+  if (!S.gearCat?.ready || (d.ess_role || "") === (d.role || "")) return false;
+  d.items = d.items || [];
+  const notes = [];
+  for (const it of d.items.filter((i) => i.essential)) {
+    const deps = dependentsOf(d, it).filter((x) => !x.essential);
+    if (deps.length) { delete it.essential; notes.push(`${it.name} 은(는) ${deps.map((x) => x.name).join(", ")} 에 필요해서 일반 장비로 남겼습니다.`); }
+    else d.items = d.items.filter((i) => i !== it);
+  }
+  const added = [];
+  for (const spec of essentialSpecs(d.role)) {
+    const x = findEssential(spec);
+    if (!x) continue;
+    const ex = d.items.find((i) => lc(i.name) === lc(x.name));
+    if (ex) { ex.essential = d.role; continue; }
+    if (await addCatalogItem(d, spec.tab, x, { auto: "role", essential: d.role })) added.push(x.name);
+  }
+  d.ess_role = d.role || "";
+  if (added.length) toast(`${S.cg.roles[d.role]?.ko || d.role} 필수 장비 장착: ${added.join(", ")}`, "ok");
+  notes.forEach((n) => toast(n, "ok"));
+  return true;
+}
+function ensureEssentials(d) {
+  if (S.essBusy || !S.gearCat?.ready || (d.ess_role || "") === (d.role || "")) return;
+  S.essBusy = true;
+  syncEssentials(d).then((changed) => { if (changed && S.draft === d) { markDirty(); render(); recheck(render); } })
+    .finally(() => { S.essBusy = false; });
+}
+async function aiEquip(d) {
+  const cash = d.money?.cash || 0, left = cash - itemsSpent(d);
+  if (left <= 0) return toast("남은 돈이 없습니다. 시작 자금을 굴리거나 장비를 빼세요.", "err");
+  S.gearAiBusy = true; render();
+  try {
+    const ch = draftToChar(d);
+    for (const k of ["items", "gear", "cyberware", "money"]) delete ch[k];
+    const r = await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/gear/suggest`,
+      { character: ch, items: d.items.map((i) => ({ name: i.name })), budget: left }));
+    if (!r) return;
+    const before = JSON.parse(JSON.stringify(d.items));
+    const added = [];
+    for (const e of r.items) {
+      if ((+e.item.cost || 0) * (e.qty || 1) + prereqCost(d, e.tab, e.item) > cash - itemsSpent(d)) continue;
+      if (d.items.some((i) => lc(i.name) === lc(e.item.name))) continue;
+      if (await addCatalogItem(d, e.tab, e.item, { auto: "ai", why: e.why, qty: e.qty })) added.push(e.item.name);
+    }
+    const n = d.items.length - before.length;   // 함께 장착된 선행 장치 포함
+    S.gearAi = { key: draftKey(d), before, summary: r.summary, skipped: r.skipped || [], count: n };
+    toast(n ? `AI 추천 장비 ${n}개를 장착했습니다.` : "더 장착할 만한 장비를 찾지 못했습니다.", n ? "ok" : "err");
+    markDirty(); recheck(render);
+  } finally { S.gearAiBusy = false; render(); }
+}
+
 function editor() {
   const d = S.draft;
   const m = S.camp.meta;
@@ -702,7 +861,7 @@ function editor() {
           if (d.role === k) return;
           d.role = k; d.slots = slotsForRole(k); d.money = null;
           d.pickupRows = d.pickupRows.filter((p) => !d.slots.some((s) => s.name === p.name));
-          render(); recheck(render);
+          render(); recheck(render); ensureEssentials(d);
         } },
         h("b", {}, `${r.ko} `, h("span", { class: "dim small" }, k)), h("span", { class: "small" }, `특수능력: ${r.special}`),
         skillHelp(r.special) ? h("div", { class: "skill-help" }, skillHelp(r.special).replace(/ – [^–]+$/, "")) : null))),
@@ -778,29 +937,16 @@ function editor() {
   const hlSum = d.items.filter((i) => i.kind === "cyber").reduce((a, i) => a + (+i.hl || 0), 0);
   const G = S.gearCat;
   const UI = (S.gearUI = S.gearUI || { open: false, tab: "weapons", group: "", q: "", afford: false });
-  const owns = (re) => d.items.some((i) => re.test(i.name));
-  const reqOk = (c) => !c.requires || (c.requires === "Neural Processor" ? owns(/^Neural Processor/i)
-    : c.requires === "Cyberoptic" ? owns(/^Cyberoptic/i) : c.requires === "Cyberaudio" ? owns(/^Cyberaudio/i) : owns(/^Cyber(arm|leg)/i));
-  const SURG = { N: "간단 시술", M: "소수술", MA: "대수술", CR: "중대 수술" };
-  const infoOf = (tab, x) => tab === "weapons" ? [x.type, `피해 ${x.damage}`, x.shots && `장탄 ${x.shots}`, x.rof && `ROF ${x.rof}`, `WA ${x.wa}`, x.range, x.rel && `신뢰 ${x.rel}`].filter(Boolean).join(" · ")
-    : tab === "armor" ? `${x.loc} · SP ${x.sp} · EV ${x.ev}${x.soft ? " · 칼날엔 SP 절반" : ""}`
-    : tab === "cyberware" ? [`HL ${x.hl}`, SURG[x.surgery], x.effect].filter(Boolean).join(" · ") : (x.note || "");
-  const KIND = { weapons: "weapon", armor: "armor", gear: "gear", cyberware: "cyber" };
-  const rollHL = async (item, dice) => {
-    if (/d/i.test(String(dice))) {
-      const r = await guard(() => POST("/api/roll", { expr: String(dice).toUpperCase() }));
-      if (r) { item.hl = r.total; item.hl_roll = `${dice} → ${r.total}`; }
-    } else { item.hl = parseFloat(dice) || 0; item.hl_roll = `고정 ${item.hl}`; }
-  };
+  const reqOk = (c) => reqMet(d.items, c.requires);
+  const infoOf = gearInfo;
   const addItem = async (tab, x) => {
-    const it = { kind: KIND[tab], name: x.name, cost: +x.cost || 0, qty: 1, info: infoOf(tab, x), cost_text: x.cost_text };
-    if (tab === "cyberware") {
-      if (!reqOk(x)) toast(`${x.name} 은(는) ${x.requires} 가 먼저 있어야 합니다.`, "err");
-      it.hl_dice = x.hl; await rollHL(it, x.hl);
-      toast(`${x.name}: 휴머니티 손실 ${it.hl_roll}`, "ok");
-    }
-    d.items.push(it); markDirty(); render(); recheck(render);
+    const it = await addCatalogItem(d, tab, x);
+    if (!it) { render(); return; }
+    if (tab === "cyberware") toast(`${x.name}: 휴머니티 손실 ${it.hl_roll}`, "ok");
+    markDirty(); render(); recheck(render);
   };
+  ensureEssentials(d);
+  const ess = d.role ? essentialPreview(d.role) : [];
   const ROLE_TIPS = {
     Solo: "무기(권총·소총) + 방어구(아머재킷)부터. 사이버웨어는 Neural Processor + 스마트건 링크·부스터가 단골",
     Netrunner: "장비 탭 '넷러닝'에서 사이버덱, 사이버웨어 탭에서 Neural Processor + Interface Plugs + Cybermodem Link",
@@ -818,6 +964,9 @@ function editor() {
     h("ol", { class: "small", style: "line-height:1.8;margin:6px 0 0;padding-left:18px" },
       h("li", {}, h("b", {}, "시작 자금 굴리기"), " – 이 금액 안에서 삽니다. 남는 돈은 현금으로 들고 시작합니다."),
       h("li", {}, h("b", {}, "무기와 방어구"), " – 무기는 쓰려는 스킬(권총=Handgun, 소총=Rifle…)에 맞춰. 방어구 SP 는 막아 주는 피해량, EV 는 REF 감소입니다."),
+      h("li", {}, h("b", {}, "직업 필수 장비"), " – 특수능력을 쓰는 데 꼭 필요한 도구(넷러너의 사이버덱·인터페이스 플러그, 테크의 툴킷 등)는 역할을 고르면 자동으로 장착되고, 역할을 바꾸면 함께 바뀝니다. ",
+        d.role ? (ess.length ? h("span", { class: "ok" }, `${S.cg.roles[d.role]?.ko || d.role}: ${ess.map((x) => x.name).join(", ")}`) : h("span", { class: "dim" }, `${S.cg.roles[d.role]?.ko || d.role} 는 필수 장비가 없습니다.`)) : null),
+      h("li", {}, h("b", {}, "✨ 장비 자동 장착"), " – AI 가 역할·출신·라이프패스·스킬을 보고 남은 돈 안에서 어울리는 장비를 골라 장착합니다. 마음에 안 들면 ‘되돌리기’."),
       h("li", {}, h("b", {}, "역할 장비"), " – 일에 필요한 도구. ", d.role && ROLE_TIPS[d.role] ? h("span", { class: "ok" }, `${S.cg.roles[d.role]?.ko || d.role}: ${ROLE_TIPS[d.role]}`) : "역할을 고르면 추천이 나옵니다."),
       h("li", {}, h("b", {}, "사이버웨어(선택)"), " – 추가하면 휴머니티 손실(HL) 주사위를 자동으로 굴립니다. 신경계 장비는 Neural Processor 가 먼저 필요합니다. 처음엔 1~3개, HL 합 20 이하가 무난합니다."),
       h("li", {}, "목록에 없는 것은 ", h("b", {}, "＋ 직접 입력"), " 또는 아래 메모 칸에 적으세요.")));
@@ -829,7 +978,11 @@ function editor() {
   const picked = d.items.length ? h("table", { class: "skill-table items" }, d.items.map((it, i) => h("tr", {},
       h("td", {}, h("span", { class: `badge kind-${it.kind}` }, { weapon: "무기", armor: "방어구", gear: "장비", cyber: "사이버", custom: "직접" }[it.kind] || "기타"), " ",
         it.kind === "custom" ? h("input", { type: "text", value: it.name, placeholder: "이름", oninput: (e) => { it.name = e.target.value; markDirty(); } }) : h("b", {}, it.name),
-        it.info ? h("div", { class: "skill-help" }, it.info) : null),
+        it.essential ? h("span", { class: "badge ok", title: "직업 필수 장비 – 역할을 바꾸면 자동으로 바뀝니다" }, "직업 필수") : null,
+        it.auto === "ai" ? h("span", { class: "badge", title: "AI 추천으로 장착" }, "AI 추천") : null,
+        it.info ? h("div", { class: "skill-help" }, it.info) : null,
+        it.requires ? h("div", { class: `small ${reqMet(d.items.filter((x) => x !== it), it.requires) ? "dim" : "err"}` }, `필요: ${it.requires}`) : null,
+        it.why ? h("div", { class: "skill-help", style: "color:var(--cyan)" }, `└ ${it.why}`) : null),
       h("td", { class: "small" }, it.kind === "cyber" ? h("span", {}, "HL ", h("input", { type: "number", step: "0.5", min: 0, value: it.hl, style: "width:56px",
           onchange: (e) => { it.hl = +e.target.value || 0; markDirty(); render(); recheck(render); } }),
           it.hl_dice ? h("button", { class: "sm ghost", title: `${it.hl_dice} 다시 굴리기`, onclick: async () => { await rollHL(it, it.hl_dice); markDirty(); render(); recheck(render); } }, "🎲") : null,
@@ -838,7 +991,15 @@ function editor() {
           onchange: (e) => { it.qty = Math.max(1, +e.target.value || 1); markDirty(); render(); recheck(render); } })) : ""),
       h("td", {}, h("input", { type: "number", min: 0, value: it.cost, style: "width:84px", title: it.cost_text && it.cost_text !== String(it.cost) ? `표 가격: ${it.cost_text}` : "",
           onchange: (e) => { it.cost = +e.target.value || 0; markDirty(); render(); recheck(render); } }), " eb",
-        h("button", { class: "sm ghost", onclick: () => { d.items.splice(i, 1); markDirty(); render(); recheck(render); } }, "✕"))))) : h("p", { class: "dim small" }, "아직 고른 장비가 없습니다.");
+        h("button", { class: "sm ghost", disabled: !!it.essential, title: it.essential ? "직업 필수 장비 – 역할을 바꾸면 자동으로 바뀝니다" : "장착 해제",
+          onclick: () => removeItem(d, it) }, "✕"))))) : h("p", { class: "dim small" }, "아직 고른 장비가 없습니다.");
+  const gai = S.gearAi?.key === draftKey(d) ? S.gearAi : null;
+  const gearAiBox = gai ? h("div", { class: "help-details", style: "margin-top:8px" },
+    h("div", { class: "row" }, h("b", { class: "small" }, `✨ AI 추천 ${gai.count}개 장착`), h("span", { style: "flex:1" }),
+      h("button", { class: "sm ghost", onclick: () => { d.items = gai.before; S.gearAi = null; toast("AI 추천 전으로 되돌렸습니다.", "ok"); markDirty(); render(); recheck(render); } }, "↶ 되돌리기"),
+      h("button", { class: "sm ghost", onclick: () => { S.gearAi = null; render(); } }, "닫기")),
+    gai.summary ? h("p", { class: "small", style: "margin:6px 0 0" }, gai.summary) : null,
+    gai.skipped.length ? h("p", { class: "dim small", style: "margin:4px 0 0" }, `제외: ${gai.skipped.join(", ")}`) : null) : null;
   let picker = null;
   if (UI.open && G?.ready) {
     const TABS = [["weapons", "무기"], ["armor", "방어구"], ["gear", "장비·도구"], ["cyberware", "사이버웨어"]];
@@ -860,7 +1021,7 @@ function editor() {
         return h("div", { class: `pick-row ${over ? "over" : ""}` },
           h("div", { style: "flex:1;min-width:0" }, h("b", {}, x.name), x.group ? h("span", { class: "dim small" }, ` · ${x.group}`) : null,
             h("div", { class: "skill-help" }, infoOf(UI.tab, x)),
-            x.requires ? h("div", { class: `small ${reqOk(x) ? "dim" : "warn"}` }, `필요: ${x.requires}${reqOk(x) ? " ✓" : ""}`) : null),
+            x.requires ? h("div", { class: `small ${reqOk(x) ? "dim" : "warn"}` }, `필요: ${x.requires}${reqOk(x) ? " ✓" : " – 아직 없음(추가하면 함께 장착할지 물어봅니다)"}`) : null),
           h("span", { class: "mono small", style: "white-space:nowrap", title: x.cost_text ? `표 가격: ${x.cost_text}` : "" }, x.cost ? `${(+x.cost).toLocaleString()}eb` : "가격 표기 없음"),
           h("button", { class: "sm cyan", onclick: () => addItem(UI.tab, x) }, "추가"));
       }), rows.length > 200 ? h("p", { class: "dim small" }, `${rows.length - 200}개 더 있음 – 검색으로 좁히세요`) : null,
@@ -875,8 +1036,11 @@ function editor() {
       } }, d.money ? "다시 굴리기" : "🎲 시작 자금 굴리기"),
       d.money ? h("span", { class: "dim small" }, `월급 ${d.money.salary.toLocaleString()} × ${d.money.months}개월 (1D6=${d.money.months_roll}÷3) · 직업 1D6=${d.money.job_roll} ${d.money.unemployed ? "→ 현재 실직 중" : "→ 재직 중"}`)
         : h("span", { class: "dim small" }, `특수능력 ${lvl} 기준 월급 × 1D6÷3 개월`)) : h("p", { class: "dim small" }, "역할을 먼저 고르세요."),
-    budget, picked,
+    budget, picked, gearAiBox,
     h("div", { class: "row", style: "margin:10px 0" },
+      G?.ready ? h("button", { class: "sm cyan", disabled: S.gearAiBusy || !aiReady() || !cash || !d.role,
+        title: !aiReady() ? "① 에서 AI 를 연결하세요" : !cash ? "시작 자금을 먼저 굴리세요" : "역할·출신·스킬에 맞는 장비를 AI 가 골라 장착",
+        onclick: () => aiEquip(d) }, S.gearAiBusy ? "AI 가 고르는 중…" : "✨ 장비 자동 장착") : null,
       G?.ready ? h("button", { class: `sm ${UI.open ? "" : "primary"}`, onclick: () => { UI.open = !UI.open; render(); } }, UI.open ? "▲ 목록 닫기" : "＋ 목록에서 추가")
         : h("span", { class: "dim small" }, "장비 목록이 없습니다(룰북 등록에서 만들 수 있음). 직접 입력하세요."),
       h("button", { class: "sm ghost", onclick: () => { d.items.push({ kind: "custom", name: "", cost: 0, qty: 1, info: "" }); markDirty(); render(); } }, "＋ 직접 입력")),
