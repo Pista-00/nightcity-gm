@@ -13,6 +13,7 @@ campaigns/<id>/
 """
 import json
 import re
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -124,6 +125,13 @@ class Campaign:
                 if meta:
                     out.append({"id": d.name, "name": meta.get("name", d.name), "created": meta.get("created")})
         return out
+
+    def delete(self) -> None:
+        """이 컴퓨터의 캠페인 폴더(캐릭터·세션·장면·대화 기록) 삭제. Notion 페이지는 건드리지 않는다."""
+        d = self.dir.resolve()
+        if d.parent != CAMPAIGNS.resolve() or not (d / "campaign.json").exists():
+            raise ValueError("잘못된 캠페인 경로")
+        shutil.rmtree(d)
 
     # ---- 메타
     @property

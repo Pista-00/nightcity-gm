@@ -180,6 +180,16 @@ def campaign_view(c: store.Campaign):
             "notion_ready": notion.ready(c)}
 
 
+@app.delete("/api/campaign/<cid>")
+def delete_campaign(cid):
+    c = campaign(cid)
+    with lock_for(cid):
+        c.delete()
+    if store.settings().get("current_campaign") == cid:
+        store.save_settings(current_campaign="")
+    return jsonify({"campaigns": store.Campaign.all()})
+
+
 @app.get("/api/campaign/<cid>")
 def get_campaign(cid):
     c = campaign(cid)

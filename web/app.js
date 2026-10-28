@@ -22,6 +22,7 @@ async function api(method, path, data) {
 }
 const GET = (p) => api("GET", p);
 const POST = (p, d = {}) => api("POST", p, d);
+const DEL = (p) => api("DELETE", p);
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -418,6 +419,19 @@ function viewBook() {
 }
 
 // ------------------------------------------------------------------ ② 캠페인
+// 캠페인 삭제 – 이름을 그대로 입력해야 지워짐(되돌릴 수 없음)
+async function deleteCampaign(c) {
+  const typed = prompt(`'${c.name}' 캠페인을 삭제합니다.\n이 컴퓨터에 저장된 캐릭터·세션 기록·장면·대화 기록이 모두 지워지고 되돌릴 수 없습니다.\n(Notion 에 올라간 페이지는 지워지지 않습니다.)\n\n확인하려면 캠페인 이름을 그대로 입력하세요:`);
+  if (typed === null) return;
+  if (typed.trim() !== c.name.trim()) return toast("이름이 달라서 삭제하지 않았습니다.", "err");
+  if (S.camp?.id === c.id) await saveDraftNow().catch(() => {});
+  const r = await guard(() => DEL(`/api/campaign/${encodeURIComponent(c.id)}`), `'${c.name}' 캠페인을 삭제했습니다.`);
+  if (!r) return;
+  S.state.campaigns = r.campaigns;
+  if (S.camp?.id === c.id) { S.camp = null; S.play.session = null; S.draft = null; }
+  render();
+}
+
 function viewCampaign() {
   const name = h("input", { type: "text", class: "wide", placeholder: "예) 나이트시티 첫 캠페인" });
   const page = h("input", { type: "url", class: "wide", placeholder: "https://www.notion.so/… (나중에 넣어도 됨)" });
@@ -434,7 +448,9 @@ function viewCampaign() {
       h("div", { class: "grid2" }, create,
         S.state.campaigns.length ? h("div", { class: "card" }, h("h3", {}, "기존 캠페인"),
           S.state.campaigns.map((c) => h("div", { class: "row" }, h("button", { onclick: async () => { S.camp = await guard(() => GET(`/api/campaign/${encodeURIComponent(c.id)}`)); render(); } }, c.name),
-            h("span", { class: "dim small" }, (c.created || "").slice(0, 10))))) : null));
+            h("span", { class: "dim small" }, (c.created || "").slice(0, 10)),
+            h("span", { style: "flex:1" }),
+            h("button", { class: "sm ghost", title: "캠페인 삭제", onclick: () => deleteCampaign(c) }, "🗑")))) : null));
   }
   const m = S.camp.meta;
   const players = (m.players || []).map((p) => ({ ...p }));
@@ -487,7 +503,8 @@ function viewCampaign() {
       h("button", { class: "primary", onclick: () => save() }, "저장"),
       h("button", { onclick: async () => { if (await save()) go("characters"); } }, "저장하고 캐릭터 생성 →"),
       h("span", { style: "flex:1" }),
-      h("button", { class: "ghost sm", onclick: () => { S.camp = null; render(); } }, "다른 캠페인 / 새로 만들기")));
+      h("button", { class: "ghost sm", onclick: () => { S.camp = null; render(); } }, "다른 캠페인 / 새로 만들기"),
+      h("button", { class: "danger sm", onclick: () => deleteCampaign({ id: S.camp.id, name: S.camp.meta.name || S.camp.id }) }, "캠페인 삭제")));
 }
 
 // ------------------------------------------------------------------ ③ 캐릭터
