@@ -336,7 +336,7 @@ GEAR_SCHEMA = {
 def _ask_list(prov, key, what, src, extra=""):
     r = _ask_json(prov, f"""{what} 를 룰북 표에서 빠짐없이 옮겨 JSON 으로:
 {{"{key}": [{GEAR_SCHEMA[key]}, ...]}}
-cost 는 숫자(범위면 낮은 값, '/레벨' 등 단위는 cost_text 에), 없는 값은 "". 표에 있는 항목만. {extra}""", src)
+cost 는 따옴표 없는 정수(예 1000, 쉼표·eb·$ 금지. 범위면 낮은 값, '/레벨' 등 단위는 cost_text 에), 없는 값은 "". 표에 있는 항목만. {extra}""", src)
     return [x for x in (r.get(key) or []) if isinstance(x, dict) and x.get("name")]
 
 
@@ -394,6 +394,11 @@ def extract_gear(prov, progress=None) -> dict:
     if len(out["weapons"]) < 15 or len(out["cyberware"]) < 40:
         part.unlink(missing_ok=True)  # 결과가 부실하면 다음엔 처음부터
         raise BookError(f"추출이 불완전합니다(무기 {len(out['weapons'])}개, 사이버웨어 {len(out['cyberware'])}개). 다시 시도하세요.")
+    for x in out["weapons"] + out["armor"] + out["gear"] + out["cyberware"]:
+        if not isinstance(x.get("cost"), int) or not x["cost"]:
+            m = re.search(r"\d[\d,]*", f'{x.get("cost") or ""} {x.get("cost_text") or ""}')
+            x.setdefault("cost_text", str(x.get("cost") or ""))
+            x["cost"] = int(m.group().replace(",", "")) if m else 0
     out["notes"] = {"cyberware": "HL 주사위를 굴려 휴머니티 손실로 기록. 10 누적마다 EMP −1."}
     GEAR.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     part.unlink(missing_ok=True)

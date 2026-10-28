@@ -8,6 +8,7 @@
 """
 import argparse
 import json
+import re
 import secrets
 import tempfile
 import threading
@@ -304,11 +305,34 @@ def book_forget():
     return jsonify({"book": book.status()})
 
 
+def _price(v) -> int:
+    """'1,000', '250eb', '$250', 250.0 같은 가격 표기에서 숫자만 꺼냄. 없으면 0."""
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)):
+        return max(int(v), 0)
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", str(v or ""))
+    return int(float(m.group().replace(",", ""))) if m else 0
+
+
+def normalize_gear(cat: dict) -> dict:
+    """AI 가 가격을 글자로 적었거나 cost_text 에만 넣은 경우에도 cost 를 숫자로 맞춤."""
+    for key in ("weapons", "armor", "gear", "cyberware"):
+        for x in cat.get(key) or []:
+            if not isinstance(x, dict):
+                continue
+            raw, text = x.get("cost"), x.get("cost_text")
+            x["cost"] = _price(raw) or _price(text)
+            if not text and raw not in (None, "", 0):
+                x["cost_text"] = str(raw)
+    return cat
+
+
 def gear_catalog():
     """장비·사이버웨어 목록: 등록한 룰북에서 만든 것(book/gear.json) 우선, 없으면 content/gear.json."""
     for p in (store.ROOT / "book" / "gear.json", store.ROOT / "content" / "gear.json"):
         if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
+            return normalize_gear(json.loads(p.read_text(encoding="utf-8")))
     return None
 
 

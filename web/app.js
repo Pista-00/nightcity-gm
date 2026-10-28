@@ -834,7 +834,7 @@ function editor() {
           h("div", { style: "flex:1;min-width:0" }, h("b", {}, x.name), x.group ? h("span", { class: "dim small" }, ` · ${x.group}`) : null,
             h("div", { class: "skill-help" }, infoOf(UI.tab, x)),
             x.requires ? h("div", { class: `small ${reqOk(x) ? "dim" : "warn"}` }, `필요: ${x.requires}${reqOk(x) ? " ✓" : ""}`) : null),
-          h("span", { class: "mono small", style: "white-space:nowrap" }, `${x.cost_text || x.cost}eb`),
+          h("span", { class: "mono small", style: "white-space:nowrap", title: x.cost_text ? `표 가격: ${x.cost_text}` : "" }, x.cost ? `${(+x.cost).toLocaleString()}eb` : "가격 표기 없음"),
           h("button", { class: "sm cyan", onclick: () => addItem(UI.tab, x) }, "추가"));
       }), rows.length > 200 ? h("p", { class: "dim small" }, `${rows.length - 200}개 더 있음 – 검색으로 좁히세요`) : null,
         !rows.length ? h("p", { class: "dim small" }, "조건에 맞는 항목이 없습니다.") : null));
