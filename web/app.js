@@ -315,7 +315,7 @@ async function uploadPdf(f) {
   if (!f) return;
   if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") return toast("PDF 파일만 등록할 수 있습니다.", "err");
   if ((S.bookJobs || {}).import?.status === "running") return toast("이미 등록 중입니다.", "err");
-  if (S.state.book?.imported && !confirm(`'${f.name}' 으로 다시 등록할까요? 기존 색인을 새로 만듭니다.`)) return;
+  if (S.state.book?.imported && !confirm(`'${f.name}' 으로 다시 등록할까요? 기존 색인을 새로 만듭니다(만든 표·목록은 유지).`)) return;
   toast(`'${f.name}' 업로드 중… (${Math.round(f.size / 1048576)}MB)`);
   const fd = new FormData(); fd.append("pdf", f);
   const r = await fetch("/api/book/import", { method: "POST", headers: { "X-App-Token": TOKEN }, body: fd });
@@ -329,6 +329,31 @@ window.addEventListener("drop", (e) => {
   e.preventDefault();
   if (S.tab === "book") uploadPdf(e.dataTransfer?.files?.[0]);
 });
+
+function imageCard(b, busy) {
+  if (!b.imported) return h("div", { class: "card" }, h("h3", {}, "2 · 그림으로 된 쪽 읽기"),
+    h("p", { class: "dim small" }, "PDF 를 등록하면 글자 없이 그림으로만 된 쪽이 있는지 확인합니다."));
+  const ip = b.image_pages || [], n = ip.length, read = b.image_read || 0;
+  const list = ip.length > 14 ? ip.slice(0, 14).join(", ") + ` 외 ${ip.length - 14}쪽` : ip.join(", ");
+  return h("div", { class: "card" },
+    h("h3", {}, "2 · 그림으로 된 쪽 읽기 (권장)"),
+    !n ? h("p", {}, h("span", { class: "badge ok" }, "필요 없음"), " 모든 쪽에 글자가 들어 있습니다.") : h("div", {},
+      h("p", { class: "dim small" }, `이 PDF 의 ${n}쪽(${list})은 글자 없이 그림으로만 되어 있어, 그 쪽의 표·가격(예: 무기 가격표)을 읽지 못합니다. ` +
+        "연결한 AI 가 이 쪽들을 이미지로 보고 글로 옮깁니다(쪽당 수십 초, 이미지라 사용량이 조금 더 듭니다). 3·4 단계 전에 하는 것을 권장합니다."),
+      h("p", {}, h("span", { class: `badge ${read === n ? "ok" : ""}` }, `읽음 ${read}/${n}`),
+        read === n ? " 이미 만든 표·목록에 반영하려면 3·4 를 다시 만드세요." : read ? " 끊긴 곳부터 이어서 읽습니다." : ""),
+      !b.images_saved ? h("p", { class: "err small" }, "그림 쪽 이미지가 저장돼 있지 않습니다. 같은 PDF 를 위에 한 번 다시 등록하세요(만든 표·목록은 유지).") : null,
+      h("div", { class: "row" },
+        h("button", { class: read < n ? "primary" : "", disabled: busy("images") || !aiReady() || !b.images_saved, onclick: async () => {
+          if (await guard(() => POST("/api/book/images", {}))) pollBook();
+        } }, read === 0 ? "읽기" : read < n ? "남은 쪽 읽기" : "다시 확인"),
+        read ? h("button", { class: "ghost sm", disabled: busy("images") || !aiReady() || !b.images_saved, onclick: async () => {
+          if (!confirm("그림 쪽을 처음부터 다시 읽을까요?")) return;
+          if (await guard(() => POST("/api/book/images", { force: true }))) pollBook();
+        } }, "처음부터 다시 읽기") : null),
+      !aiReady() ? h("span", { class: "dim small" }, "① 에서 AI 를 먼저 연결하세요") : null),
+    jobLine("images"));
+}
 
 function viewBook() {
   const b = S.state.book || {};
@@ -355,24 +380,26 @@ function viewBook() {
           : h("p", { class: "dim small" }, "텍스트가 들어 있는(검색 가능한) PDF 여야 합니다. 등록에 20~60초 정도 걸립니다."),
         drop,
         jobLine("import")),
+      imageCard(b, busy)),
+    h("div", { class: "grid2" },
       h("div", { class: "card" },
-        h("h3", {}, "2 · 캐릭터 생성 표 만들기"),
+        h("h3", {}, "3 · 캐릭터 생성 표 만들기"),
         h("p", { class: "dim small" }, "연결한 AI 가 내 룰북에서 역할·스킬 목록·월급표·라이프패스 표를 읽어 정리합니다. 몇 분 걸리고 AI 사용량이 조금 듭니다. 실패하면 다시 누르세요."),
         b.chargen ? h("p", {}, h("span", { class: "badge ok" }, "준비됨"), " 캐릭터 생성 가능") : null,
         h("button", { class: b.chargen ? "" : "primary", disabled: !b.imported || busy("chargen") || !aiReady(), onclick: async () => {
           if (await guard(() => POST("/api/book/chargen"))) pollBook();
         } }, b.chargen ? "다시 만들기" : "만들기"),
         !aiReady() ? h("span", { class: "dim small" }, "  ① 에서 AI 를 먼저 연결하세요") : null,
-        jobLine("chargen"))),
-    h("div", { class: "card" },
-      h("h3", {}, "3 · 장비·사이버웨어 목록 만들기 (권장)"),
+        jobLine("chargen")),
+      h("div", { class: "card" },
+      h("h3", {}, "4 · 장비·사이버웨어 목록 만들기 (권장)"),
       h("p", { class: "dim small" }, "캐릭터 생성 화면에서 무기·방어구·장비·사이버웨어를 목록에서 골라 가격·HL 이 자동으로 들어가게 합니다. AI 가 내 룰북의 장비표를 읽어 정리합니다(몇 분). 없으면 직접 입력해야 합니다."),
       b.gear ? h("p", {}, h("span", { class: "badge ok" }, "준비됨"), " 목록에서 고르기 가능") : null,
       h("button", { class: b.gear ? "" : "primary", disabled: !b.imported || busy("gear") || !aiReady(), onclick: async () => {
         if (await guard(() => POST("/api/book/gear"))) pollBook();
-      } }, b.gear ? "다시 만들기" : "만들기"), jobLine("gear")),
+      } }, b.gear ? "다시 만들기" : "만들기"), jobLine("gear"))),
     h("div", { class: "card" },
-      h("h3", {}, "4 · (선택) AI 정리본"),
+      h("h3", {}, "5 · (선택) AI 정리본"),
       h("p", { class: "dim small" }, "기본은 '색인' 방식이라 매 턴 지금 상황과 관련된 쪽만 찾아 GM 에게 줍니다. 판정을 더 안정적으로 하고 싶으면 책 전체를 AI 로 요약한 정리본을 만들 수 있습니다(15~30분, 사용량 많음). 만든 뒤 ① 의 룰 자료를 'AI 정리본' 으로 바꾸세요."),
       b.summary ? h("p", {}, h("span", { class: "badge ok" }, "정리본 있음")) : null,
       h("button", { disabled: !b.imported || busy("summary") || !aiReady(), onclick: async () => {

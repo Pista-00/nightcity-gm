@@ -11,6 +11,7 @@
 import json
 import math
 import re
+import shutil
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,9 @@ PAGES = BOOK / "pages.json"
 INDEX = BOOK / "index.json"
 SUMMARY = BOOK / "reference.md"
 GEAR = BOOK / "gear.json"
+PAGE_IMG = BOOK / "pages"            # 글자 없이 그림으로만 된 쪽의 이미지 (내 컴퓨터에만)
+PAGE_TEXT = BOOK / "page_text.json"  # 그 쪽들을 AI 가 읽어 옮긴 글 {쪽번호: 글}
+IMG_MIN_CHARS = 50                   # 이보다 글자가 적으면 그림 쪽으로 봄
 
 # 이 책이 맞는지 확인하는 표지 (대소문자 무시). 일정 개수 이상 있으면 통과.
 MARKERS = ["friday night firefight", "lifepath", "netrunn", "combat sense", "jury rig", "body type modifier",
@@ -54,17 +58,79 @@ def status() -> dict:
     return {"imported": bool(m), "file": m.get("file", ""), "pages": m.get("pages", 0),
             "markers": m.get("markers", []), "imported_at": m.get("imported_at", ""),
             "chargen": D.ready(), "summary": SUMMARY.exists(), "gear": GEAR.exists(),
-            "summary_parts": m.get("summary_parts", 0)}
+            "summary_parts": m.get("summary_parts", 0), **image_status()}
+
+
+def image_pages() -> list[int]:
+    """글자가 거의 없는(그림으로 된) 쪽 번호(1부터)."""
+    m = meta()
+    if "image_pages" in m:
+        return m["image_pages"]
+    return [i + 1 for i, t in enumerate(_raw_pages()) if len(t.strip()) < IMG_MIN_CHARS]
+
+
+def _page_text() -> dict:
+    return json.loads(PAGE_TEXT.read_text(encoding="utf-8")) if PAGE_TEXT.exists() else {}
+
+
+def _img_file(pno: int) -> Path:
+    return PAGE_IMG / f"p{pno:03d}.jpg"
+
+
+def image_status() -> dict:
+    if not META.exists():
+        return {"image_pages": [], "image_read": 0, "images_saved": False}
+    ip, done = image_pages(), _page_text()
+    return {"image_pages": ip, "image_read": sum(1 for p in ip if str(p) in done),
+            "images_saved": any(_img_file(p).exists() for p in ip)}
 
 
 def forget():
-    for p in (META, PAGES, INDEX, SUMMARY, D.CHARGEN_FILE, GEAR, GEAR.with_name("gear.partial.json")):
+    for p in (META, PAGES, INDEX, SUMMARY, D.CHARGEN_FILE, GEAR, GEAR.with_name("gear.partial.json"), PAGE_TEXT):
         if p.exists():
             p.unlink()
+    shutil.rmtree(PAGE_IMG, ignore_errors=True)
+
+
+def _raw_pages() -> list[str]:
+    return json.loads(PAGES.read_text(encoding="utf-8")) if PAGES.exists() else []
 
 
 def pages() -> list[str]:
-    return json.loads(PAGES.read_text(encoding="utf-8")) if PAGES.exists() else []
+    """쪽별 글. 그림 쪽은 AI 가 읽어 옮긴 글로 채운다."""
+    P = _raw_pages()
+    for k, v in _page_text().items():
+        i = int(k) - 1
+        if v and 0 <= i < len(P):
+            P[i] = f"[그림으로 된 쪽 – AI 가 읽어 옮김]\n{v}"
+    return P
+
+
+def _render_pages(pdf_path: Path, pnos: list[int], progress=None) -> bool:
+    """그림 쪽을 JPEG 로 저장(긴 변 1800px). pypdfium2·Pillow 가 없으면 False."""
+    shutil.rmtree(PAGE_IMG, ignore_errors=True)
+    if not pnos:
+        return True
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return False
+    PAGE_IMG.mkdir(parents=True, exist_ok=True)
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        for k, pno in enumerate(pnos):
+            if progress:
+                progress(f"그림 쪽 이미지 저장 {k + 1}/{len(pnos)}", 0.9 + 0.08 * k / len(pnos))
+            pg = pdf[pno - 1]
+            w, h = pg.get_size()
+            img = pg.render(scale=1800 / max(w, h, 1)).to_pil().convert("RGB")
+            img.save(_img_file(pno), quality=82)
+    except Exception:  # noqa: BLE001
+        shutil.rmtree(PAGE_IMG, ignore_errors=True)
+        return False
+    finally:
+        pdf.close()
+    return True
 
 
 # ---------------------------------------------------------------- 등록
@@ -94,9 +160,14 @@ def import_pdf(path: Path, filename: str, progress=None) -> dict:
         raise BookError(f"이 PDF 는 지원하는 룰북으로 확인되지 않았습니다 (쪽수 {n}, 확인된 표지 {len(found)}/{len(MARKERS)}). "
                         "텍스트가 들어 있는(검색 가능한) Cyberpunk 2020 코어 룰북 PDF 를 선택하세요.")
     BOOK.mkdir(exist_ok=True)
+    img_pages = [i + 1 for i, t in enumerate(texts) if len(t.strip()) < IMG_MIN_CHARS]
+    rendered = _render_pages(path, img_pages, progress)
+    if PAGE_TEXT.exists():          # 다른 PDF 일 수 있으니 예전 판독 결과는 버림
+        PAGE_TEXT.unlink()
     PAGES.write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
     build_index(texts)
-    m = {"file": filename, "pages": n, "markers": found, "imported_at": datetime.now().isoformat(timespec="seconds")}
+    m = {"file": filename, "pages": n, "markers": found, "imported_at": datetime.now().isoformat(timespec="seconds"),
+         "image_pages": img_pages, "images_rendered": rendered}
     META.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
     if progress:
         progress("색인 완료", 1.0)
@@ -340,6 +411,40 @@ cost 는 따옴표 없는 정수(예 1000, 쉼표·eb·$ 금지. 범위면 낮�
     return [x for x in (r.get(key) or []) if isinstance(x, dict) and x.get("name")]
 
 
+READ_PROMPT = """이 이미지는 사용자가 등록한 TRPG 룰북의 한 쪽이다. 쪽에 적힌 글을 원문 그대로 옮겨 적어라.
+- 번역하지 말고 원문 언어 그대로. 숫자·기호(예 250.00, 1D6+1, -1, 2,000)는 보이는 그대로 정확히.
+- 표는 머리글 행부터 한 행씩, 칸 사이를 ' | ' 로 구분해 적는다. 표 안의 분류 제목 행(예 LIGHT AUTOPISTOLS)도 그 자리에 적는다.
+- 여러 단(column)이면 왼쪽 단부터 위에서 아래로. 쪽 번호·머리글 장식은 생략해도 된다.
+- 그림·장식뿐이고 읽을 글이 없으면 '(글 없음)' 한 줄만.
+- 설명이나 머리말 없이 옮긴 글만 출력."""
+
+
+def read_image_pages(prov, progress=None, force=False) -> dict:
+    """그림으로만 된 쪽을 AI 에게 이미지로 보여 주고 글로 옮겨 둔다. 끊기면 다시 눌러 이어서."""
+    if not PAGES.exists():
+        raise BookError("먼저 룰북 PDF 를 등록하세요.")
+    ip = image_pages()
+    if not ip:
+        return status()
+    if not any(_img_file(p).exists() for p in ip):
+        raise BookError("그림 쪽 이미지가 없습니다. 이 기능이 생기기 전에 등록한 PDF 이면 같은 PDF 를 한 번 다시 등록하세요"
+                        "(만들어 둔 캐릭터 생성 표·장비 목록은 그대로 남습니다).")
+    done = {} if force else _page_text()
+    todo = [p for p in ip if str(p) not in done]
+    for k, pno in enumerate(todo):
+        if progress:
+            progress(f"{pno}쪽 읽는 중 ({k + 1}/{len(todo)})", k / len(todo))
+        f = _img_file(pno)
+        text = prov.read_image(READ_PROMPT, [f]).strip() if f.exists() else ""
+        text = re.sub(r"^```[a-z]*\n?|\n?```$", "", text).strip()
+        done[str(pno)] = "" if text in ("", "(글 없음)") else text
+        PAGE_TEXT.write_text(json.dumps(done, ensure_ascii=False, indent=1), encoding="utf-8")
+    if progress:
+        progress("색인 다시 만드는 중", 0.98)
+    build_index(pages())
+    return status()
+
+
 def extract_gear(prov, progress=None) -> dict:
     if not PAGES.exists():
         raise BookError("먼저 룰북 PDF 를 등록하세요.")
@@ -357,9 +462,11 @@ def extract_gear(prov, progress=None) -> dict:
         part.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
 
     def weapons():
-        src = _pages_for({"rof": 3, "rel": 2, "conc": 3, "avail": 3, "kendachi": 5, "minami": 2, "avenger": 6, "smg": 2, "assault": 2},
+        src = _pages_for({"rof": 3, "rel": 2, "conc": 3, "avail": 3, "kendachi": 5, "minami": 2, "avenger": 6, "smg": 2, "assault": 2,
+                      "weapons list": 15},
                          extra=1, limit_page=130, top=4, budget=50000)
-        return _ask_list(prov, "weapons", "무기 표(권총·SMG·소총·샷건·중화기·특수·근접 무기)", src)
+        return _ask_list(prov, "weapons", "무기 표(권총·SMG·소총·샷건·중화기·특수·근접 무기)", src,
+                         "가격은 무기 목록 표(WEAPONS LIST 등)의 Cost 열에서. 무기 설명 문단에는 가격이 없으니 표와 이름을 맞춰 채운다.")
 
     def armor_src():
         return _pages_for({"kevlar": 4, "armor jacket": 5, "flak": 5, "metalgear": 6, "ev": 1, "techscanner": 6, "medkit": 6,

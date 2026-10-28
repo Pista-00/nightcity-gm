@@ -15,6 +15,7 @@
 system_blocks = [(텍스트, 캐시여부)] – 큰 고정 블록(룰북)은 캐시 대상으로 표시.
 키는 credentials 에서 읽는다(웹 화면에서 입력). 각 제공자의 NEEDS 에 필요한 값이 정의돼 있다.
 """
+import base64
 import json
 import os
 import shutil
@@ -65,9 +66,21 @@ class Provider:
     def chat(self, system_blocks, messages) -> str:
         raise NotImplementedError
 
+    def read_image(self, prompt: str, images: list) -> str:
+        """이미지(룰북의 그림 쪽 등)를 보여 주고 prompt 에 답하게 한다."""
+        raise ProviderError(f"{self.label} 은(는) 이미지 읽기를 지원하지 않습니다.")
+
     @staticmethod
     def join_system(system_blocks) -> str:
         return "\n\n".join(t for t, _ in system_blocks if t)
+
+
+def _img(path) -> tuple[str, str]:
+    """(media_type, base64) – jpg/png 만."""
+    ext = os.path.splitext(str(path))[1].lower()
+    mt = "image/png" if ext == ".png" else "image/jpeg"
+    with open(path, "rb") as f:
+        return mt, base64.b64encode(f.read()).decode()
 
 
 # ---------------------------------------------------------------- Claude
@@ -99,6 +112,14 @@ class Claude(Provider):
         data = _check(requests.post(f"{self.URL}/messages", headers=self._h(), json=body, timeout=TIMEOUT))
         return "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
 
+    def read_image(self, prompt, images):
+        content = []
+        for im in images:
+            mt, b = _img(im)
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b}})
+        content.append({"type": "text", "text": prompt})
+        return self.chat([], [{"role": "user", "content": content}])
+
 
 # ---------------------------------------------------------------- OpenAI / 호환
 class OpenAI(Provider):
@@ -129,6 +150,15 @@ class OpenAI(Provider):
     def chat(self, system_blocks, messages):
         msgs = [{"role": "system", "content": self.join_system(system_blocks)}] + messages
         body = {"model": self.model, "messages": msgs, self.token_param: self.max_tokens}
+        data = _check(requests.post(f"{self.base}/chat/completions", headers=self._h(), json=body, timeout=TIMEOUT))
+        return data["choices"][0]["message"].get("content") or ""
+
+    def read_image(self, prompt, images):
+        content = [{"type": "text", "text": prompt}]
+        for im in images:
+            mt, b = _img(im)
+            content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b}"}})
+        body = {"model": self.model, "messages": [{"role": "user", "content": content}], self.token_param: self.max_tokens}
         data = _check(requests.post(f"{self.base}/chat/completions", headers=self._h(), json=body, timeout=TIMEOUT))
         return data["choices"][0]["message"].get("content") or ""
 
@@ -170,10 +200,26 @@ class Gemini(Provider):
                 "generationConfig": {"maxOutputTokens": self.max_tokens, "temperature": self.temperature}}
         data = _check(requests.post(f"{self.URL}/models/{self.model}:generateContent",
                                     headers=self._h(), json=body, timeout=TIMEOUT))
+        return self._text(data)
+
+    @staticmethod
+    def _text(data):
         cands = data.get("candidates") or []
         if not cands:
             raise ProviderError(f"응답 없음: {str(data)[:300]}")
         return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
+
+    def read_image(self, prompt, images):
+        parts = []
+        for im in images:
+            mt, b = _img(im)
+            parts.append({"inline_data": {"mime_type": mt, "data": b}})
+        parts.append({"text": prompt})
+        body = {"contents": [{"role": "user", "parts": parts}],
+                "generationConfig": {"maxOutputTokens": self.max_tokens, "temperature": 0}}
+        data = _check(requests.post(f"{self.URL}/models/{self.model}:generateContent",
+                                    headers=self._h(), json=body, timeout=TIMEOUT))
+        return self._text(data)
 
 
 # ---------------------------------------------------------------- Ollama
@@ -196,6 +242,14 @@ class Ollama(Provider):
         msgs = [{"role": "system", "content": self.join_system(system_blocks)}] + messages
         body = {"model": self.model, "messages": msgs, "stream": False,
                 "options": {"num_ctx": 32768, "num_predict": self.max_tokens, "temperature": self.temperature}}
+        data = _check(requests.post(f"{self.URL}/api/chat", json=body, timeout=TIMEOUT))
+        return data.get("message", {}).get("content", "")
+
+    def read_image(self, prompt, images):
+        """비전 모델(예: llava, qwen2.5vl, gemma3)일 때만 동작."""
+        msg = {"role": "user", "content": prompt, "images": [_img(im)[1] for im in images]}
+        body = {"model": self.model, "messages": [msg], "stream": False,
+                "options": {"num_ctx": 16384, "num_predict": self.max_tokens, "temperature": 0}}
         data = _check(requests.post(f"{self.URL}/api/chat", json=body, timeout=TIMEOUT))
         return data.get("message", {}).get("content", "")
 
@@ -324,16 +378,51 @@ class ClaudeCode(Provider):
                                    encoding="utf-8", cwd=tmp, timeout=600, env=self._env())
             except subprocess.TimeoutExpired:
                 raise ProviderError("Claude Code 응답 시간 초과 (10분)") from None
+        return self._result(r)
+
+    @staticmethod
+    def _result(r) -> str:
         out = r.stdout.strip()
-        line = next((l for l in reversed(out.splitlines()) if l.startswith("{")), "")
-        try:
-            data = json.loads(line)
-        except ValueError:
-            raise ProviderError(f"Claude Code 오류: {(r.stderr or out)[:500]}") from None
+        data = None
+        for line in reversed(out.splitlines()):
+            if not line.startswith("{"):
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type", "result") == "result":
+                data = d
+                break
+        if data is None:
+            raise ProviderError(f"Claude Code 오류: {(r.stderr or out)[:500]}")
         if data.get("is_error") or data.get("subtype") not in (None, "success"):
             hint = out.splitlines()[0] if out else ""
             raise ProviderError(f"Claude Code 오류: {data.get('result') or hint or r.stderr[:300]}")
         return data.get("result", "")
+
+    def read_image(self, prompt, images):
+        """stream-json 입력으로 이미지를 함께 보낸다(도구 없이)."""
+        exe = self.binary()
+        if not exe:
+            raise ProviderError("Claude Code 가 설치되어 있지 않습니다.")
+        content = []
+        for im in images:
+            mt, b = _img(im)
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b}})
+        content.append({"type": "text", "text": prompt})
+        line = json.dumps({"type": "user", "message": {"role": "user", "content": content}})
+        cmd = [exe, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+               "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", ""]
+        if self.model:
+            cmd += ["--model", self.model]
+        with tempfile.TemporaryDirectory(prefix="cp2020-gm-") as tmp:
+            try:
+                r = subprocess.run(cmd, input=line + "\n", capture_output=True, text=True,
+                                   encoding="utf-8", cwd=tmp, timeout=600, env=self._env())
+            except subprocess.TimeoutExpired:
+                raise ProviderError("Claude Code 응답 시간 초과 (10분)") from None
+        return self._result(r)
 
 
 def _find_cli(name: str, env_var: str, extra: list[str]) -> str | None:
@@ -433,10 +522,20 @@ class ChatGPTCodex(Provider):
         prompt = ("# 지시사항 (반드시 따를 것)\n" + self.join_system(system_blocks) +
                   "\n\n# 중요\n파일을 읽거나 명령을 실행하지 말고, 위 지시에 따라 답변 텍스트만 출력하라.\n\n# 대화\n" +
                   ClaudeCode._as_prompt(messages))
+        return self._run(prompt)
+
+    def read_image(self, prompt, images):
+        return self._run(prompt + "\n\n(첨부한 이미지를 보고 답하라. 파일을 읽거나 명령을 실행하지 말 것.)", images)
+
+    def _run(self, prompt, images=()):
+        exe = self.binary()
+        if not exe:
+            raise ProviderError("Codex CLI 가 설치되어 있지 않습니다.")
         with tempfile.TemporaryDirectory(prefix="cp2020-gm-") as tmp:
             out = os.path.join(tmp, "answer.txt")
             cmd = [exe, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only",
                    "--ignore-user-config", "--ignore-rules", "--color", "never", "-C", tmp, "-o", out]
+            cmd += [f"--image={os.path.abspath(str(im))}" for im in images]
             if self.model and self.model != "default":
                 cmd += ["-m", self.model]
             cmd.append("-")

@@ -280,6 +280,13 @@ def _provider_for_book():
     return p
 
 
+@app.post("/api/book/images")
+def book_images():
+    prov = _provider_for_book()
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    return jsonify(start_job("images", lambda progress: book.read_image_pages(prov, progress, force)))
+
+
 @app.post("/api/book/chargen")
 def book_chargen():
     prov = _provider_for_book()

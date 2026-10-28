@@ -2,4 +2,6 @@ flask>=3.0
 requests>=2.31
 PyYAML>=6.0
 pypdf>=4.0
+pypdfium2>=4.0   # 그림으로 된 쪽을 이미지로 저장
+Pillow>=10.0
 # 이미지 자동 생성(scripts/build_library.py)을 쓸 때만: pip install openai
