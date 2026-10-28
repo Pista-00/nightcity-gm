@@ -17,7 +17,12 @@ async function api(method, path, data) {
   });
   let json = {};
   try { json = await res.json(); } catch (_) { /* empty */ }
-  if (!res.ok) throw new Error(json.error || `${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // 코드를 업데이트(git pull)했는데 예전에 켠 앱이 그대로 돌고 있으면 새 기능 주소가 없음
+    if (res.status === 404 && /requested URL was not found/i.test(json.error || ""))
+      throw new Error("앱이 업데이트 전 버전으로 실행 중입니다. 실행 창을 닫고(또는 Ctrl+C) 다시 실행한 뒤 새로고침하세요.");
+    throw new Error(json.error || `${res.status} ${res.statusText}`);
+  }
   return json;
 }
 const GET = (p) => api("GET", p);

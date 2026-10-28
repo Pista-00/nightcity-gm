@@ -646,6 +646,8 @@ def play_resume(cid):
     c = campaign(cid)
     with lock_for(cid):
         g = game(c, body().get("session"))
+        if not g.pending_rolls():
+            abort(400, "남은 GM 굴림이 없습니다.")
         new = g.resume()
     return jsonify({"new": [engine.view(i) for i in new], "pending_rolls": g.pending_rolls()})
 
