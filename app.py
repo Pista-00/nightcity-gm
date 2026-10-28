@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file
 
-from cp2020 import ai_providers, book, chargen, chargen_data as D, credentials, dice, engine, notion, store
+from cp2020 import ai_providers, jsonfix, book, chargen, chargen_data as D, credentials, dice, engine, notion, store
 
 app = Flask(__name__, static_folder="web", static_url_path="/static")
 TOKEN = secrets.token_urlsafe(24)
@@ -403,14 +403,15 @@ def gear_suggest(cid):
 - name 은 목록의 이름을 글자 그대로. why 는 이 캐릭터에게 왜 맞는지 한국어 한 줄.
 
 JSON 하나만 출력: {{"items": [{{"name": "", "qty": 1, "why": ""}}], "summary": "<전체 구성 한국어 한두 문장>"}}"""
-    reply = prov.chat([("너는 사이버펑크 2020 장비 담당 픽서다. 요청한 JSON 만 출력한다. 목록에 없는 물건은 고르지 않는다.", False),
-                       ("# 장비 목록 (분류|이름|가격|정보)\n" + _gear_lines(cat), True)],
-                      [{"role": "user", "content": prompt}])
-    m = re.search(r"\{.*\}", reply or "", re.S)
-    try:
-        r = json.loads(m.group(0)) if m else {}
-    except ValueError:
-        r = {}
+    system = [("너는 사이버펑크 2020 장비 담당 픽서다. 요청한 JSON 만 출력한다. 목록에 없는 물건은 고르지 않는다.", False),
+              ("# 장비 목록 (분류|이름|가격|정보)\n" + _gear_lines(cat), True)]
+    r, err = None, ""
+    for attempt in range(2):     # JSON 이 깨지면 고쳐 읽고, 그래도 안 되면 한 번 더 요청
+        reply = prov.chat(system, [{"role": "user", "content": prompt + (jsonfix.RETRY_HINT.format(err=err) if attempt else "")}])
+        r, err = jsonfix.extract(reply)
+        if r is not None and isinstance(r.get("items"), list):
+            break
+    r = r or {}
     if not isinstance(r.get("items"), list):
         abort(502, "AI 응답을 읽지 못했습니다. 다시 눌러 주세요.")
     norm = lambda t: re.sub(r"\s+", " ", str(t or "")).strip().lower()  # noqa: E731

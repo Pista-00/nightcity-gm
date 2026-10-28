@@ -1,6 +1,7 @@
 flask>=3.0
 requests>=2.31
 PyYAML>=6.0
+json-repair>=0.30   # AI 가 만든 깨진 JSON 고치기
 pypdf>=4.0
 pypdfium2>=4.0   # 그림으로 된 쪽을 이미지로 저장
 Pillow>=10.0

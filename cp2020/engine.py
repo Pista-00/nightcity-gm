@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from . import ai_providers, book, chargen, chargen_data as D, dice, store
+from . import ai_providers, jsonfix, book, chargen, chargen_data as D, dice, store
 
 RULE_MODES = ["index", "summary", "none"]   # 색인(기본) / AI 정리본 / 없음
 MAX_HISTORY = 40
@@ -327,13 +327,16 @@ def ai_character(concept: str, base: dict, method: str, points: int, pool: dict)
 JSON 객체 하나만 출력: {{"handle","name","age","role","stats":{{}},"career":{{}},"pickup":{{}},"cyberware":[],"gear":"","notes":""}}"""
     gear_rules = book.retrieve("weapons armor cyberware cost eurodollars humanity cost handgun jacket gear list "
                                + concept, budget_chars=16000, k=10) or "(룰북 미등록)"
-    reply = prov.chat([("너는 사이버펑크 2020 캐릭터 생성 도우미다. 요청한 JSON 만 출력한다.", False),
-                       (f"# 장비·사이버웨어 참고\n{gear_rules}", True)],
-                      [{"role": "user", "content": prompt}])
-    m = re.search(r"\{.*\}", reply, re.S)
-    if not m:
-        raise RuntimeError("AI 응답에서 JSON 을 찾지 못했습니다.")
-    data = json.loads(m.group(0))
+    system = [("너는 사이버펑크 2020 캐릭터 생성 도우미다. 요청한 JSON 만 출력한다.", False),
+              (f"# 장비·사이버웨어 참고\n{gear_rules}", True)]
+    data, err = None, ""
+    for attempt in range(2):     # JSON 이 깨지면 고쳐 읽고, 그래도 안 되면 한 번 더 요청
+        reply = prov.chat(system, [{"role": "user", "content": prompt + (jsonfix.RETRY_HINT.format(err=err) if attempt else "")}])
+        data, err = jsonfix.extract(reply)
+        if data is not None:
+            break
+    if data is None:
+        raise RuntimeError(err + ". 다시 시도하세요.")
     ch = {**base, **{k: v for k, v in data.items() if v not in (None, "")}}
     ch["stats"] = {k: int(ch.get("stats", {}).get(k, 0) or 0) for k in D.STAT_KEYS}
     return {"character": ch, "problems": chargen.validate(ch, method, points)}

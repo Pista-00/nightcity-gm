@@ -16,7 +16,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from . import chargen_data as D
+from . import chargen_data as D, jsonfix
 from .ai_providers import Provider as _Provider, ProviderError
 
 ai_read_image_base = _Provider.read_image
@@ -397,17 +397,16 @@ def _src(name, prov=None, progress=None, frac=(0.0, 1.0)) -> str:
 
 
 def _ask_json(prov, task: str, source: str) -> dict:
-    reply = prov.chat([("너는 TRPG 룰북에서 데이터를 정확히 옮겨 적는 도우미다. 요청한 JSON 객체 하나만 출력한다. "
-                        "룰북에 있는 값만 쓰고 지어내지 않는다.", False),
-                       (f"# 사용자가 등록한 룰북 발췌\n{source}", True)],
-                      [{"role": "user", "content": task}])
-    m = re.search(r"\{.*\}", reply, re.S)
-    if not m:
-        raise BookError("AI 응답에서 JSON 을 찾지 못했습니다. 다시 시도하세요.")
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError as e:
-        raise BookError(f"AI 가 만든 JSON 이 올바르지 않습니다({e}). 다시 시도하세요.") from None
+    system = [("너는 TRPG 룰북에서 데이터를 정확히 옮겨 적는 도우미다. 요청한 JSON 객체 하나만 출력한다. "
+               "룰북에 있는 값만 쓰고 지어내지 않는다. 문자열 안에 큰따옴표가 있으면(예: 무기 이름의 별명) \\\" 로 이스케이프한다.", False),
+              (f"# 사용자가 등록한 룰북 발췌\n{source}", True)]
+    err = ""
+    for attempt in range(2):     # JSON 이 깨지면 고쳐 읽고, 그래도 안 되면 한 번 더 요청
+        reply = prov.chat(system, [{"role": "user", "content": task + (jsonfix.RETRY_HINT.format(err=err) if attempt else "")}])
+        d, err = jsonfix.extract(reply)
+        if d is not None:
+            return d
+    raise BookError(f"{err}. 다시 시도하세요.")
 
 
 def _need10(d, name):
