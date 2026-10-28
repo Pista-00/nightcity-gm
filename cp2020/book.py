@@ -17,6 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 from . import chargen_data as D
+from .ai_providers import Provider as _Provider, ProviderError
+
+ai_read_image_base = _Provider.read_image
 
 ROOT = Path(__file__).resolve().parent.parent
 BOOK = ROOT / "book"
@@ -123,8 +126,8 @@ def _render_pages(pdf_path: Path, pnos: list[int], progress=None) -> bool:
                 progress(f"그림 쪽 이미지 저장 {k + 1}/{len(pnos)}", 0.9 + 0.08 * k / len(pnos))
             pg = pdf[pno - 1]
             w, h = pg.get_size()
-            img = pg.render(scale=1800 / max(w, h, 1)).to_pil().convert("RGB")
-            img.save(_img_file(pno), quality=82)
+            img = pg.render(scale=1800 / max(w, h, 1), grayscale=True).to_pil().convert("L")
+            img.save(_img_file(pno), quality=80)
     except Exception:  # noqa: BLE001
         shutil.rmtree(PAGE_IMG, ignore_errors=True)
         return False
@@ -161,7 +164,7 @@ def import_pdf(path: Path, filename: str, progress=None) -> dict:
                         "텍스트가 들어 있는(검색 가능한) Cyberpunk 2020 코어 룰북 PDF 를 선택하세요.")
     BOOK.mkdir(exist_ok=True)
     img_pages = [i + 1 for i, t in enumerate(texts) if len(t.strip()) < IMG_MIN_CHARS]
-    rendered = _render_pages(path, img_pages, progress)
+    rendered = _render_pages(path, sorted(set(img_pages) | set(spec_pages(texts))), progress)
     if PAGE_TEXT.exists():          # 다른 PDF 일 수 있으니 예전 판독 결과는 버림
         PAGE_TEXT.unlink()
     PAGES.write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
@@ -264,26 +267,128 @@ def summary_text() -> str:
 
 
 # ---------------------------------------------------------------- AI 로 캐릭터 생성 데이터 추출
-def _pages_for(keywords, extra=1, budget=45000, limit_page=None, top=8):
-    """키워드(가중치)가 많이 나오는 쪽과 그 이웃 쪽을 모아 텍스트로."""
-    P = pages()
+# 표를 뽑을 때 쓰는 쪽 고르기 규칙(키워드 가중치). 등록할 때 이 규칙으로 고른 쪽은 이미지로 저장해 두고,
+# 표를 만들 때 AI 가 그 이미지를 보고 옮긴 글을 쓴다(PDF 글자 추출은 표의 칸 순서가 뒤섞이는 일이 많음).
+SPECS = {
+    "roles": dict(keywords={"career skills": 20, "career package": 20, "pickup skills": 8, "special abilit": 6,
+                            "awareness/notice": 2, "jury rig": 3, "streetdeal": 3, "combat sense": 3, "interface": 1},
+                  limit_page=120, top=5),
+    "skills": dict(keywords={"skill list": 20, "personal grooming": 4, "wardrobe": 3, "endurance": 2, "interrogation": 2,
+                             "human perception": 2, "accounting": 3, "archery": 3, "aero tech": 3, "cryotank": 2,
+                             "pick pocket": 2, "zoology": 3}, limit_page=120, top=6),
+    "salary": dict(keywords={"occupation": 10, "salary": 6, "per month": 6, "unemployed": 6, "character points": 10,
+                             "cinematic": 10, "major hero": 10, "minor hero": 10}, limit_page=120, top=5),
+    "lifepath1": dict(keywords=["lifepath", "dress", "hairstyle", "affectation", "ethnic", "family", "siblings", "parents",
+                                "childhood", "motivations", "personality", "valued", "possession"], limit_page=60),
+    "lifepath2": dict(keywords=["big problems", "big wins", "disaster", "lucky", "friends", "enemies", "romance", "tragic",
+                                "problematic", "mutual"], limit_page=60),
+    "weapons": dict(keywords={"rof": 3, "rel": 2, "conc": 3, "avail": 3, "kendachi": 5, "minami": 2, "avenger": 6, "smg": 2,
+                              "assault": 2, "weapons list": 15}, limit_page=130, top=4, budget=50000, vision=3),
+    "armor_gear": dict(keywords={"kevlar": 4, "armor jacket": 5, "flak": 5, "metalgear": 6, "ev": 1, "techscanner": 6,
+                                 "medkit": 6, "mastoid": 6, "binoglasses": 6, "laptop": 3, "tech toolkit": 6},
+                       limit_page=130, top=5, budget=50000, vision=4),
+    "cyber1": dict(keywords={"humanity cost": 4, "neural": 4, "kerenzikov": 6, "sandevistan": 6, "interface plugs": 6,
+                             "biomonitor": 6, "nasal": 5, "grafted muscle": 6, "skin weave": 6, "smartgun link": 6,
+                             "fashionware": 6, "implant": 3, "cyberware list": 15, "h.loss": 40, "id code": 30}, limit_page=130, top=6,
+                   budget=55000, vision=3, vision_next=True),
+    "cyber2": dict(keywords={"cyberoptic": 5, "cyberaudio": 5, "cyberarm": 6, "cyberleg": 6, "wolvers": 6, "rippers": 4,
+                             "linear frame": 6, "body plating": 6, "hydraulic": 6, "talon": 5, "cyberware list": 15,
+                             "h.loss": 40, "id code": 30}, limit_page=130, top=6, budget=55000, vision=3, vision_next=True),
+}
+
+
+def _scored(texts, keywords, limit_page=None) -> list[int]:
+    """키워드 점수가 높은 순서의 쪽 번호(0부터)."""
     weights = keywords if isinstance(keywords, dict) else {k: 1 for k in keywords}
     scored = []
-    for i, t in enumerate(P):
+    for i, t in enumerate(texts):
+        if limit_page and i + 1 > limit_page:
+            break
+        sc = sum(t.lower().count(k.lower()) * w for k, w in weights.items())
+        if sc:
+            scored.append((sc, i))
+    scored.sort(reverse=True)
+    return [i for _, i in scored]
+
+
+def _choose(texts, keywords, extra=1, limit_page=None, top=8, budget=45000, vision=0, vision_next=False) -> list[int]:
+    """키워드(가중치)가 많이 나오는 쪽과 그 이웃 쪽 번호(0부터)."""
+    weights = keywords if isinstance(keywords, dict) else {k: 1 for k in keywords}
+    scored = []
+    for i, t in enumerate(texts):
         if limit_page and i + 1 > limit_page:
             break
         low = t.lower()
-        s = sum(low.count(k.lower()) * w for k, w in weights.items())
-        if s:
-            scored.append((s, i))
+        sc = sum(low.count(k.lower()) * w for k, w in weights.items())
+        if sc:
+            scored.append((sc, i))
     scored.sort(reverse=True)
     chosen = set()
     for _, i in scored[:top]:
         for j in range(i - extra, i + extra + 1):
-            if 0 <= j < len(P):
+            if 0 <= j < len(texts):
                 chosen.add(j)
+    return sorted(chosen)
+
+
+def _vision_pages(texts, sp) -> list[int]:
+    """이미지로 읽을 쪽(1부터): 점수 상위 vision 개."""
+    n = sp.get("vision", 0)
+    top = [i + 1 for i in _scored(texts, sp["keywords"], sp.get("limit_page"))[:n]] if n else []
+    if sp.get("vision_next"):          # 표가 다음 쪽으로 이어지는 경우
+        top += [p + 1 for p in top if p < len(texts)]
+    return sorted(set(top))
+
+
+def spec_pages(texts) -> list[int]:
+    """표 규칙이 이미지로 읽는 쪽(1부터) – 등록할 때 이미지로 저장할 쪽."""
+    return sorted({p for sp in SPECS.values() for p in _vision_pages(texts, sp)})
+
+
+def _vision_ok(prov) -> bool:
+    return prov is not None and type(prov).read_image is not ai_read_image_base and not getattr(prov, "_no_vision", False)
+
+
+def _transcribe(prov, pnos, progress=None, frac=(0.0, 1.0)) -> None:
+    """이미지로 저장된 쪽 중 아직 안 읽은 것을 AI 가 읽어 page_text.json 에 저장."""
+    done = _page_text()
+    todo = [p for p in pnos if str(p) not in done and _img_file(p).exists()]
+    for k, pno in enumerate(todo):
+        if progress:
+            progress(f"{pno}쪽 표를 이미지로 읽는 중 ({k + 1}/{len(todo)})", frac[0] + (frac[1] - frac[0]) * k / len(todo))
+        try:
+            text = prov.read_image(READ_PROMPT, [_img_file(pno)]).strip()
+        except ProviderError as e:
+            if "지원하지 않습니다" in str(e):
+                prov._no_vision = True     # 이미지 못 보는 AI 면 글자 추출본으로 진행
+                return
+            if _skippable(e):
+                continue                   # 이 쪽은 건너뛰고 글자 추출본 사용(다음에 다시 시도)
+            raise
+        text = re.sub(r"^```[a-z]*\n?|\n?```$", "", text).strip()
+        done[str(pno)] = "" if text in ("", "(글 없음)") else text
+        PAGE_TEXT.write_text(json.dumps(done, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _skippable(e) -> bool:
+    """AI 가 이 쪽만 거절한 경우(콘텐츠 필터 등) – 작업 전체를 멈추지 않고 건너뜀."""
+    m = str(e).lower()
+    return any(k in m for k in ("content filtering", "content_filter", "content policy", "safety", "recitation",
+                                "blocked", "invalid_prompt"))
+
+
+def _src(name, prov=None, progress=None, frac=(0.0, 1.0)) -> str:
+    """규칙 name 으로 쪽을 골라 글로 합침. prov 가 이미지를 볼 수 있으면 표 쪽을 먼저 이미지로 읽음."""
+    sp = dict(SPECS[name])
+    budget = sp.pop("budget", 45000)
+    raw = _raw_pages()
+    chosen = _choose(raw, budget=budget, **sp)
+    if _vision_ok(prov):
+        want = set(_vision_pages(raw, SPECS[name])) | {i + 1 for i in chosen if len(raw[i].strip()) < IMG_MIN_CHARS}
+        _transcribe(prov, sorted(want), progress, frac)
+    P = pages()
     out, used = [], 0
-    for i in sorted(chosen):
+    for i in chosen:
         if used + len(P[i]) > budget:
             break
         out.append(f"=== p.{i + 1} ===\n{P[i]}")
@@ -317,9 +422,7 @@ def extract_chargen(prov, progress=None) -> dict:
     out = {}
 
     step("역할·특수능력·커리어 스킬 추출 중", 0.05)
-    src = _pages_for({"career skills": 20, "career package": 20, "pickup skills": 8, "special abilit": 6,
-                      "awareness/notice": 2, "jury rig": 3, "streetdeal": 3, "combat sense": 3, "interface": 1},
-                     extra=1, limit_page=120, top=5)
+    src = _src("roles", prov, progress, (0.02, 0.15))
     r = _ask_json(prov, """역할(Role) 10개의 데이터를 JSON 으로:
 {"ROLES": {"<영어 역할명>": {"ko": "<한국어 이름>", "special": "<특수능력 영어 이름>",
    "desc": "<역할 설명, 한국어 한 문장, 직접 요약>", "skills": [<특수능력을 제외한 커리어 스킬 9개, 영어 이름>]}},
@@ -332,9 +435,7 @@ def extract_chargen(prov, progress=None) -> dict:
     out["ROLES"], out["SPECIAL_STAT"] = roles, r.get("SPECIAL_STAT") or {}
 
     step("스킬 목록 추출 중", 0.3)
-    src = _pages_for({"skill list": 20, "personal grooming": 4, "wardrobe": 3, "endurance": 2, "interrogation": 2,
-                      "human perception": 2, "accounting": 3, "archery": 3, "aero tech": 3, "cryotank": 2,
-                      "pick pocket": 2, "zoology": 3}, extra=1, limit_page=120, top=6)
+    src = _src("skills", prov, progress, (0.22, 0.3))
     r = _ask_json(prov, """마스터 스킬 목록을 능력치별로 JSON 으로:
 {"SKILLS": {"ATTR": [...], "BODY": [...], "COOL": [...], "EMP": [...], "INT": [...], "REF": [...], "TECH": [...]},
  "TECH_CHOICES": [<테키가 자유 선택할 수 있는 기술 계열 스킬 목록>]}
@@ -347,8 +448,7 @@ def extract_chargen(prov, progress=None) -> dict:
     out["TECH_CHOICES"] = r.get("TECH_CHOICES") or out["SKILLS"]["TECH"]
 
     step("월급표·능력치 포인트 추출 중", 0.5)
-    src = _pages_for({"occupation": 10, "salary": 6, "per month": 6, "unemployed": 6, "character points": 10,
-                      "cinematic": 10, "major hero": 10, "minor hero": 10}, extra=1, limit_page=120, top=5)
+    src = _src("salary", prov, progress, (0.42, 0.5))
     r = _ask_json(prov, f"""두 표를 JSON 으로:
 {{"SALARY": {{"<역할명 – 반드시 다음 중 하나: {', '.join(roles)}>": [<특수능력 1~5, 6, 7, 8, 9, 10 일 때 월급 숫자 6개>]}},
  "CINEMATIC": {{"<포인트 숫자>": "<등급 이름 한국어 (영어)>"}}}}""", src)
@@ -361,8 +461,7 @@ def extract_chargen(prov, progress=None) -> dict:
         raise BookError("능력치 포인트 표를 찾지 못했습니다. 다시 시도하세요.")
 
     step("라이프패스 표 추출 중 (1/2)", 0.65)
-    src = _pages_for(["lifepath", "dress", "hairstyle", "affectation", "ethnic", "family", "siblings", "parents",
-                      "childhood", "motivations", "personality", "valued", "possession"], extra=1, limit_page=60)
+    src = _src("lifepath1", prov, progress, (0.6, 0.66))
     r1 = _ask_json(prov, """라이프패스 앞부분 표들을 한국어로 옮겨 JSON 으로. 각 표는 1D10 결과 1~10 순서의 문자열 10개 배열:
 {"clothes": [], "hair": [], "affectation": [], "ethnic": [<출신(모국어)>], "family_rank": [], "parent_fate": [<부모에게 무슨 일이 있었나>],
  "family_tragedy": [<가문의 위기>], "childhood": [<유년기 환경>],
@@ -370,8 +469,7 @@ def extract_chargen(prov, progress=None) -> dict:
  "personality": [], "valued_person": [], "value": [], "feel_people": [], "possession": []}""", src)
 
     step("라이프패스 표 추출 중 (2/2)", 0.82)
-    src = _pages_for(["big problems", "big wins", "disaster", "lucky", "friends", "enemies", "romance", "tragic",
-                      "problematic", "mutual"], extra=1, limit_page=60)
+    src = _src("lifepath2", prov, progress, (0.8, 0.84))
     r2 = _ask_json(prov, """라이프패스 인생 사건 표들을 한국어로 옮겨 JSON 으로. 각 표는 1D10 결과 1~10 순서의 문자열 10개 배열이고,
 범위로 된 표(예: 1-4 ...)는 칸마다 펼쳐서 10개를 채운다. 'Roll 1D10x100' 은 {d10x100}, 'Roll 1D10 개월' 등은 {d10} 로 표기.
 {"disaster": [<재난 10개>], "disaster_detail": {"<재난 배열 인덱스 0~9>": [<그 재난의 세부 표 10칸>]},
@@ -411,12 +509,12 @@ cost 는 따옴표 없는 정수(예 1000, 쉼표·eb·$ 금지. 범위면 낮�
     return [x for x in (r.get(key) or []) if isinstance(x, dict) and x.get("name")]
 
 
-READ_PROMPT = """이 이미지는 사용자가 등록한 TRPG 룰북의 한 쪽이다. 쪽에 적힌 글을 원문 그대로 옮겨 적어라.
-- 번역하지 말고 원문 언어 그대로. 숫자·기호(예 250.00, 1D6+1, -1, 2,000)는 보이는 그대로 정확히.
-- 표는 머리글 행부터 한 행씩, 칸 사이를 ' | ' 로 구분해 적는다. 표 안의 분류 제목 행(예 LIGHT AUTOPISTOLS)도 그 자리에 적는다.
-- 여러 단(column)이면 왼쪽 단부터 위에서 아래로. 쪽 번호·머리글 장식은 생략해도 된다.
-- 그림·장식뿐이고 읽을 글이 없으면 '(글 없음)' 한 줄만.
-- 설명이나 머리말 없이 옮긴 글만 출력."""
+READ_PROMPT = """이 이미지는 사용자가 소유한 TRPG 룰북의 한 쪽이다. 게임 진행용 데이터로 정리하라.
+- 표: 머리글 행부터 한 행씩, 칸 사이를 ' | ' 로 구분해 적는다. 표 안의 분류 제목 행(예 LIGHT AUTOPISTOLS)도 그 자리에.
+  이름·숫자·기호(예 250.00, 1D6+1, -1, 2,000, (MA))는 보이는 그대로 정확히. 칸이 비었으면 빈칸.
+- 본문 문단: 원문을 옮기지 말고, 게임 규칙과 수치만 한국어로 짧게 요약(항목 이름은 영어 원문 유지).
+- 그림·장식뿐이면 '(글 없음)' 한 줄만.
+- 설명이나 머리말 없이 결과만 출력."""
 
 
 def read_image_pages(prov, progress=None, force=False) -> dict:
@@ -431,17 +529,26 @@ def read_image_pages(prov, progress=None, force=False) -> dict:
                         "(만들어 둔 캐릭터 생성 표·장비 목록은 그대로 남습니다).")
     done = {} if force else _page_text()
     todo = [p for p in ip if str(p) not in done]
+    skipped = []
     for k, pno in enumerate(todo):
         if progress:
             progress(f"{pno}쪽 읽는 중 ({k + 1}/{len(todo)})", k / len(todo))
         f = _img_file(pno)
-        text = prov.read_image(READ_PROMPT, [f]).strip() if f.exists() else ""
+        try:
+            text = prov.read_image(READ_PROMPT, [f]).strip() if f.exists() else ""
+        except ProviderError as e:
+            if not _skippable(e):
+                raise
+            skipped.append(pno)
+            continue
         text = re.sub(r"^```[a-z]*\n?|\n?```$", "", text).strip()
         done[str(pno)] = "" if text in ("", "(글 없음)") else text
         PAGE_TEXT.write_text(json.dumps(done, ensure_ascii=False, indent=1), encoding="utf-8")
     if progress:
         progress("색인 다시 만드는 중", 0.98)
     build_index(pages())
+    if skipped:
+        raise BookError(f"AI 가 {', '.join(map(str, skipped))}쪽 읽기를 거절했습니다(나머지는 완료). 다시 누르면 그 쪽만 다시 시도합니다.")
     return status()
 
 
@@ -462,26 +569,20 @@ def extract_gear(prov, progress=None) -> dict:
         part.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
 
     def weapons():
-        src = _pages_for({"rof": 3, "rel": 2, "conc": 3, "avail": 3, "kendachi": 5, "minami": 2, "avenger": 6, "smg": 2, "assault": 2,
-                      "weapons list": 15},
-                         extra=1, limit_page=130, top=4, budget=50000)
+        src = _src("weapons", prov, progress, (0.05, 0.2))
         return _ask_list(prov, "weapons", "무기 표(권총·SMG·소총·샷건·중화기·특수·근접 무기)", src,
                          "가격은 무기 목록 표(WEAPONS LIST 등)의 Cost 열에서. 무기 설명 문단에는 가격이 없으니 표와 이름을 맞춰 채운다.")
 
     def armor_src():
-        return _pages_for({"kevlar": 4, "armor jacket": 5, "flak": 5, "metalgear": 6, "ev": 1, "techscanner": 6, "medkit": 6,
-                           "mastoid": 6, "binoglasses": 6, "laptop": 3, "tech toolkit": 6}, extra=1, limit_page=130, top=5, budget=50000)
+        return _src("armor_gear", prov, progress, (0.25, 0.35))
 
     def cyber1():
-        src = _pages_for({"humanity cost": 4, "neural": 4, "kerenzikov": 6, "sandevistan": 6, "interface plugs": 6, "biomonitor": 6,
-                          "nasal": 5, "grafted muscle": 6, "skin weave": 6, "smartgun link": 6, "fashionware": 6, "implant": 3},
-                         extra=1, limit_page=130, top=6, budget=55000)
+        src = _src("cyber1", prov, progress, (0.55, 0.65))
         return _ask_list(prov, "cyberware", "사이버웨어 표 중 패션웨어·뉴럴웨어(링크·부스터·플러그·칩 소켓 포함)·임플란트·바이오웨어", src,
                          "신경계 장치(링크·부스터·플러그·칩 소켓)는 requires 에 Neural Processor. Neural Processor 자체도 포함.")
 
     def cyber2():
-        src = _pages_for({"cyberoptic": 5, "cyberaudio": 5, "cyberarm": 6, "cyberleg": 6, "wolvers": 6, "rippers": 4, "linear frame": 6,
-                          "body plating": 6, "hydraulic": 6, "talon": 5}, extra=1, limit_page=130, top=6, budget=55000)
+        src = _src("cyber2", prov, progress, (0.75, 0.82))
         return _ask_list(prov, "cyberware", "사이버웨어 표 중 사이버무기·사이버옵틱(+옵션)·사이버오디오(+옵션)·사이버림(+옵션·손·발·내장·림 무기)·리니어 프레임·바디 플레이팅", src,
                          "옵틱 옵션은 requires Cyberoptic, 오디오 옵션은 Cyberaudio, 림 옵션·손·발·내장·림 무기는 Cyberarm/Cyberleg.")
 

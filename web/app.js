@@ -339,7 +339,7 @@ function imageCard(b, busy) {
     h("h3", {}, "2 · 그림으로 된 쪽 읽기 (권장)"),
     !n ? h("p", {}, h("span", { class: "badge ok" }, "필요 없음"), " 모든 쪽에 글자가 들어 있습니다.") : h("div", {},
       h("p", { class: "dim small" }, `이 PDF 의 ${n}쪽(${list})은 글자 없이 그림으로만 되어 있어, 그 쪽의 표·가격(예: 무기 가격표)을 읽지 못합니다. ` +
-        "연결한 AI 가 이 쪽들을 이미지로 보고 글로 옮깁니다(쪽당 수십 초, 이미지라 사용량이 조금 더 듭니다). 3·4 단계 전에 하는 것을 권장합니다."),
+        "연결한 AI 가 이 쪽들을 이미지로 보고 글로 옮깁니다(쪽당 수 초~수십 초, 이미지라 사용량이 조금 더 듭니다). 3·4 단계 전에 하는 것을 권장합니다."),
       h("p", {}, h("span", { class: `badge ${read === n ? "ok" : ""}` }, `읽음 ${read}/${n}`),
         read === n ? " 이미 만든 표·목록에 반영하려면 3·4 를 다시 만드세요." : read ? " 끊긴 곳부터 이어서 읽습니다." : ""),
       !b.images_saved ? h("p", { class: "err small" }, "그림 쪽 이미지가 저장돼 있지 않습니다. 같은 PDF 를 위에 한 번 다시 등록하세요(만든 표·목록은 유지).") : null,
@@ -384,7 +384,7 @@ function viewBook() {
     h("div", { class: "grid2" },
       h("div", { class: "card" },
         h("h3", {}, "3 · 캐릭터 생성 표 만들기"),
-        h("p", { class: "dim small" }, "연결한 AI 가 내 룰북에서 역할·스킬 목록·월급표·라이프패스 표를 읽어 정리합니다. 몇 분 걸리고 AI 사용량이 조금 듭니다. 실패하면 다시 누르세요."),
+        h("p", { class: "dim small" }, "연결한 AI 가 내 룰북에서 역할·스킬 목록·월급표·라이프패스 표를 읽어 정리합니다. PDF 글자 추출은 표의 칸이 뒤섞이기 쉬워서, 표가 있는 쪽은 AI 가 이미지로 직접 읽습니다(처음 한 번만). 몇 분 걸립니다. 실패하면 다시 누르세요 – 읽어 둔 쪽은 다시 읽지 않습니다."),
         b.chargen ? h("p", {}, h("span", { class: "badge ok" }, "준비됨"), " 캐릭터 생성 가능") : null,
         h("button", { class: b.chargen ? "" : "primary", disabled: !b.imported || busy("chargen") || !aiReady(), onclick: async () => {
           if (await guard(() => POST("/api/book/chargen"))) pollBook();
@@ -393,7 +393,7 @@ function viewBook() {
         jobLine("chargen")),
       h("div", { class: "card" },
       h("h3", {}, "4 · 장비·사이버웨어 목록 만들기 (권장)"),
-      h("p", { class: "dim small" }, "캐릭터 생성 화면에서 무기·방어구·장비·사이버웨어를 목록에서 골라 가격·HL 이 자동으로 들어가게 합니다. AI 가 내 룰북의 장비표를 읽어 정리합니다(몇 분). 없으면 직접 입력해야 합니다."),
+      h("p", { class: "dim small" }, "캐릭터 생성 화면에서 무기·방어구·장비·사이버웨어를 목록에서 골라 가격·HL 이 자동으로 들어가게 합니다. AI 가 내 룰북의 장비표 쪽을 이미지로 읽어 정리합니다(몇 분, 처음 한 번만 이미지 읽기). 없으면 직접 입력해야 합니다."),
       b.gear ? h("p", {}, h("span", { class: "badge ok" }, "준비됨"), " 목록에서 고르기 가능") : null,
       h("button", { class: b.gear ? "" : "primary", disabled: !b.imported || busy("gear") || !aiReady(), onclick: async () => {
         if (await guard(() => POST("/api/book/gear"))) pollBook();
