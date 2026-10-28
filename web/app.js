@@ -783,6 +783,19 @@ async function aiEquip(d) {
   } finally { S.gearAiBusy = false; render(); }
 }
 
+// 장비 검색: 화면을 다시 그려도 검색창 포커스·커서를 유지(한글 조합 중에는 다시 그리지 않음)
+function gearSearch(UI, el) {
+  UI.q = el.value;
+  clearTimeout(UI.t);
+  UI.t = setTimeout(() => {
+    const box = document.getElementById("gear-search");
+    const pos = box === document.activeElement ? box.selectionStart : null;
+    render();
+    const nb = document.getElementById("gear-search");
+    if (nb && pos !== null) { nb.focus(); nb.setSelectionRange(pos, pos); }
+  }, 250);
+}
+
 function editor() {
   const d = S.draft;
   const m = S.camp.meta;
@@ -1006,13 +1019,16 @@ function editor() {
     const list = G[UI.tab] || [];
     const groups = [...new Set(list.map((x) => x.group).filter(Boolean))];
     const q = UI.q.trim().toLowerCase();
-    const rows = list.filter((x) => (!UI.group || x.group === UI.group) && (!q || `${x.name} ${x.group || ""} ${x.effect || ""} ${x.note || ""}`.toLowerCase().includes(q))
+    const words = q.split(/\s+/).filter(Boolean);
+    const rows = list.filter((x) => (!UI.group || x.group === UI.group) && (!words.length || ((t) => words.every((w) => t.includes(w)))(`${x.name} ${x.group || ""} ${x.effect || ""} ${x.note || ""}`.toLowerCase()))
       && (!UI.afford || !cash || (+x.cost || 0) <= cash - spent));
     picker = h("div", { class: "picker" },
       h("div", { class: "row" }, TABS.map(([k, l]) => h("button", { class: `sm ${UI.tab === k ? "cyan" : "ghost"}`, onclick: () => { UI.tab = k; UI.group = ""; render(); } }, l)),
         h("span", { style: "flex:1" }),
         groups.length > 1 ? select([["", "전체 분류"], ...groups.map((g) => [g, g])], UI.group, (v) => { UI.group = v; render(); }) : null,
-        h("input", { type: "text", placeholder: "검색", value: UI.q, style: "width:140px", oninput: (e) => { UI.q = e.target.value; clearTimeout(UI.t); UI.t = setTimeout(render, 250); } }),
+        h("input", { type: "text", id: "gear-search", placeholder: "검색", value: UI.q, style: "width:140px",
+          oninput: (e) => { if (!e.isComposing) gearSearch(UI, e.target); },
+          oncompositionend: (e) => gearSearch(UI, e.target) }),
         h("label", { class: "check" }, h("input", { type: "checkbox", checked: UI.afford, onchange: (e) => { UI.afford = e.target.checked; render(); } }), "살 수 있는 것만")),
       UI.tab === "armor" && G.notes?.armor ? h("p", { class: "dim small", style: "margin:6px 0" }, G.notes.armor) : null,
       UI.tab === "cyberware" ? h("p", { class: "dim small", style: "margin:6px 0" }, "추가하면 HL 주사위를 굴려 휴머니티 손실이 기록됩니다. ‘필요:’ 표시는 먼저 달아야 하는 장치입니다.") : null,
