@@ -555,7 +555,7 @@ def play_state(cid):
     g = game(c, request.args.get("session"))
     st = c.notion_state
     sent = {(l.get("scene")) for l in st.get("log", []) if l.get("kind") == "scene"}
-    return jsonify({"session": g.session.name, "sessions": [p.name for p in c.sessions()],
+    return jsonify({"session": g.session.name, "pending_rolls": g.pending_rolls(), "sessions": [p.name for p in c.sessions()],
                     "log": [engine.view(i) for i in g.tr.items], "sent_scenes": sorted(x for x in sent if x),
                     "scenes": [{k: s.get(k) for k in ("id", "title", "image", "location", "time")} for s in c.scenes()],
                     "session_text": g.session.read_text(encoding="utf-8"),
@@ -615,7 +615,18 @@ def play_turn(cid):
                     except Exception as e:
                         result["notion_error"] = str(e)
     result["unlogged"] = len(g.tr.items) - notion.logged_upto(c, g.session) if notion.ready(c) else 0
+    result["pending_rolls"] = g.pending_rolls()
     return jsonify(result)
+
+
+@app.post("/api/campaign/<cid>/play/resume")
+def play_resume(cid):
+    """자동 굴림 상한에 걸려 남은 GM 굴림 이어서 진행."""
+    c = campaign(cid)
+    with lock_for(cid):
+        g = game(c, body().get("session"))
+        new = g.resume()
+    return jsonify({"new": [engine.view(i) for i in new], "pending_rolls": g.pending_rolls()})
 
 
 @app.post("/api/campaign/<cid>/play/log")
@@ -633,8 +644,9 @@ def play_log(cid):
 def play_retry(cid):
     c = campaign(cid)
     with lock_for(cid):
-        new = game(c, body().get("session")).retry()
-    return jsonify({"new": [engine.view(i) for i in new]})
+        g = game(c, body().get("session"))
+        new = g.retry()
+    return jsonify({"new": [engine.view(i) for i in new], "pending_rolls": g.pending_rolls()})
 
 
 @app.post("/api/campaign/<cid>/play/undo")

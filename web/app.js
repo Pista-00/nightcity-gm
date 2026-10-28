@@ -1109,7 +1109,7 @@ async function loadPlay(session) {
   if (!S.camp) return;
   const r = await guard(() => GET(`/api/campaign/${encodeURIComponent(S.camp.id)}/play${session || S.play.session ? `?session=${encodeURIComponent(session || S.play.session)}` : ""}`));
   if (!r) return;
-  Object.assign(S.play, { session: r.session, sessions: r.sessions, log: r.log, sent: new Set(r.sent_scenes), scenes: r.scenes, sessionText: r.session_text, unlogged: r.unlogged });
+  Object.assign(S.play, { session: r.session, sessions: r.sessions, log: r.log, sent: new Set(r.sent_scenes), scenes: r.scenes, sessionText: r.session_text, unlogged: r.unlogged, pendingRolls: r.pending_rolls || 0 });
   if (S.tab === "play") render();
 }
 function scrollLog() { const l = $(".log"); if (l) l.scrollTop = l.scrollHeight; }
@@ -1134,10 +1134,21 @@ async function sendTurn(text, actor, kind = "player") {
     (r.auto_sent || []).forEach((id) => S.play.sent.add(id));
     if (r.unlogged !== undefined) S.play.unlogged = r.unlogged;
     if (r.notion_error) toast(`Notion: ${r.notion_error}`, "err");
+    S.play.pendingRolls = r.pending_rolls || 0;
     await refreshCamp();
   } else {
     await loadPlay();
   }
+  render();
+}
+
+async function resumeRolls() {
+  if (S.play.busy) return;
+  S.play.busy = true; render();
+  const r = await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/play/resume`, { session: S.play.session }));
+  S.play.busy = false;
+  if (r) { S.play.log.push(...r.new); S.play.pendingRolls = r.pending_rolls || 0; await refreshCamp(); }
+  else await loadPlay();
   render();
 }
 
@@ -1385,6 +1396,9 @@ function viewPlay() {
   const showDice = { v: !!S.play.showDice };
   const checks = S.play.busy ? [] : currentChecks();
   const composer = h("div", { class: "composer" },
+    S.play.pendingRolls && !S.play.busy ? h("div", { class: "rollreq", style: "display:flex;align-items:center;gap:10px;margin-bottom:8px" },
+      h("span", { style: "flex:1" }, `🎲 아직 굴리지 않은 GM 굴림 ${S.play.pendingRolls}개 – 한 번에 이어지는 굴림이 많아 잠시 멈췄습니다.`),
+      h("button", { class: "sm primary", onclick: resumeRolls }, "▶ 굴리고 계속")) : null,
     checks.length ? checkPanel(checks, chars) : null,
     S.play.showDice ? diceBox(chars) : null,
     S.play.pending.length ? h("div", { class: "chips" }, S.play.pending.map((p, i) => h("span", { class: "chip" }, p,
@@ -1395,7 +1409,7 @@ function viewPlay() {
       h("span", { style: "flex:1" }),
       h("button", { class: "sm ghost", disabled: S.play.busy, onclick: async () => {
         const r = await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/play/retry`, { session: S.play.session }));
-        if (r) { S.play.log.pop(); S.play.log.push(...r.new); render(); }
+        if (r) { S.play.log.pop(); S.play.log.push(...r.new); S.play.pendingRolls = r.pending_rolls || 0; render(); }
       } }, "↻ 다시 생성"),
       h("button", { class: "sm ghost", disabled: S.play.busy, onclick: async () => {
         if (!confirm("마지막 주고받기를 취소할까요? (이미 Notion 에 기록된 내용은 남습니다)")) return;

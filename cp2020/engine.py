@@ -13,7 +13,8 @@ from . import ai_providers, jsonfix, book, chargen, chargen_data as D, dice, sto
 
 RULE_MODES = ["index", "summary", "none"]   # 색인(기본) / AI 정리본 / 없음
 MAX_HISTORY = 40
-MAX_AUTO_ROLL = 3
+NO_CRIT_RE = re.compile(r"부위|위치|피해|데미지|세이브|save|location|damage|표|table|기절|사망|stun|death", re.I)  # 크리티컬 없는 굴림
+MAX_AUTO_ROLL = 6   # 한 번 입력에 자동 굴림→이어 쓰기 반복 상한(남으면 화면의 '계속' 버튼)
 
 SCENE_RE = re.compile(r"\[\[SCENE(?P<attrs>[^\]]*)\]\](?P<body>.*?)\[\[/SCENE\]\]", re.S)
 ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
@@ -46,6 +47,8 @@ INSTRUCTIONS = """\
 - 플레이어 판정: 무엇을 굴릴지 쉽게 설명하고, 판정마다 CHECK 태그를 붙인 뒤 결과를 기다려라(아래 출력 규약 5).
   프로그램이 이 태그로 플레이어 화면의 주사위 창을 자동으로 채운다.
 - 네가 굴려야 하는 판정(NPC 공격, 숨은 굴림, 피해 등)은 ROLL 태그로 요청하라. 결과를 받기 전에는 그 결과를 서술하지 마라.
+- 전투에서는 공격 한 번에 필요한 굴림(명중 + 맞았을 때의 부위·피해)을 한 응답에서 함께 요청하라. 결과를 받은 뒤 빗나갔으면
+  부위·피해는 버린다. 같은 차례에 행동하는 NPC 여러 명의 굴림도 한꺼번에 요청하라(왕복을 줄이기 위해).
 - 1D10 자연 10 = 크리티컬(1D10 추가), 자연 1 = 펌블. 프로그램이 표시해 준다.
 - 피해 처리: 부위(1D10) → 방어구 SP → 머리면 2배 → BTM → 상처 단계 → Stun/Death Save.
 
@@ -219,6 +222,11 @@ class Game:
         new = [self.tr.add("user", text, kind=kind, actor=actor)]
         reply = self._call(prov)
         new += self._assistant(reply)
+        return new + self._auto_rolls(prov, reply)
+
+    def _auto_rolls(self, prov, reply: str) -> list[dict]:
+        """GM 응답의 ROLL 요청을 굴려 결과를 돌려주고 이어서 쓰게 한다(최대 MAX_AUTO_ROLL 번)."""
+        new = []
         for _ in range(MAX_AUTO_ROLL):
             rolls = ROLL_RE.findall(reply)
             if not rolls:
@@ -226,7 +234,7 @@ class Game:
             lines = []
             for expr, why in rolls:
                 try:
-                    lines.append(f"- {why.strip() or expr}: {dice.roll(expr)['text']}")
+                    lines.append(f"- {why.strip() or expr}: {dice.roll(expr, crit=not NO_CRIT_RE.search(why or ''))['text']}")
                 except dice.DiceError as e:
                     lines.append(f"- {why.strip() or expr}: 굴림 실패 ({e})")
             new.append(self.tr.add("user", "[프로그램 주사위 결과 – GM 요청분]\n" + "\n".join(lines), kind="auto_roll"))
@@ -234,13 +242,25 @@ class Game:
             new += self._assistant(reply)
         return new
 
+    def pending_rolls(self) -> int:
+        """마지막 GM 응답에 아직 굴리지 않은 ROLL 요청이 몇 개 있나."""
+        last = self.tr.items[-1] if self.tr.items else None
+        return len(ROLL_RE.findall(last.get("content", ""))) if last and last["role"] == "assistant" else 0
+
+    def resume(self) -> list[dict]:
+        """상한에 걸려 남은 GM 굴림을 이어서 진행."""
+        if not self.pending_rolls():
+            raise RuntimeError("남은 GM 굴림이 없습니다.")
+        return self._auto_rolls(self.provider(), self.tr.items[-1]["content"])
+
     def retry(self) -> list[dict]:
         if not self.tr.items or self.tr.items[-1]["role"] != "assistant":
             raise RuntimeError("다시 생성할 응답이 없습니다.")
         self.tr.items.pop()
         self.tr.rewrite()
         prov = self.provider()
-        return self._assistant(self._call(prov))
+        reply = self._call(prov)
+        return self._assistant(reply) + self._auto_rolls(prov, reply)
 
     def undo(self) -> int:
         n = 0

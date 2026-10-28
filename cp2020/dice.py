@@ -14,7 +14,8 @@ class DiceError(ValueError):
     pass
 
 
-def roll(expr: str, rng=random) -> dict:
+def roll(expr: str, rng=random, crit: bool = True) -> dict:
+    """crit=False: 부위·피해·세이브·표 굴림처럼 크리티컬/펌블이 없는 굴림."""
     m = PATTERN.match(expr)
     if not m:
         raise DiceError(f"주사위 표현식을 이해하지 못했습니다: {expr!r} (예: 1D10+14, 3D6, 1D6/2)")
@@ -26,7 +27,7 @@ def roll(expr: str, rng=random) -> dict:
     faces = [rng.randint(1, sides) for _ in range(n)]
     note = ""
     extra = []
-    if n == 1 and sides == 10:
+    if crit and n == 1 and sides == 10:
         if faces[0] == 10:
             extra = [rng.randint(1, 10)]
             note = "크리티컬! (자연 10 → 1D10 추가)"
