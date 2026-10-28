@@ -1104,6 +1104,17 @@ function editor() {
 // ------------------------------------------------------------------ ④ 플레이
 const WOUNDS = ["무사", "경상 Light", "중상 Serious", "치명 Critical", "빈사0 Mortal", "빈사1", "빈사2", "빈사3", "빈사4", "빈사5", "빈사6"];
 const woundOf = (dmg) => WOUNDS[Math.min(10, Math.ceil((+dmg || 0) / 4))];
+// 상처 단계별 페널티와 세이브 목표값(1D10 이 이 값 이하면 성공)
+function woundLine(ch, dmg) {
+  const lv = Math.min(10, Math.ceil((+dmg || 0) / 4));   // 0 무사, 1 경상, 2 중상, 3 치명, 4~10 빈사0~6
+  if (!lv) return null;
+  const save = +ch.derived?.save || +ch.stats?.BODY || 0;
+  const eff = lv === 2 ? "REF −2" : lv === 3 ? "REF·INT·COOL ½" : lv >= 4 ? "REF·INT·COOL ⅓" : "페널티 없음";
+  return h("div", { class: "small", style: "margin-top:2px" },
+    h("span", { class: lv >= 3 ? "err" : "warn" }, eff),
+    h("span", { class: "dim" }, ` · Stun Save ≤ ${Math.max(0, save - (lv - 1))}`),
+    lv >= 4 ? h("span", { class: "err" }, ` · Death Save ≤ ${Math.max(0, save - (lv - 4))} (매 턴)`) : null);
+}
 
 async function loadPlay(session) {
   if (!S.camp) return;
@@ -1187,6 +1198,13 @@ function renderItem(it) {
           `🎲 판정 요청 · ${s.who || "?"}: ${s.stat}${s.skill ? ` + ${s.skill}` : ""} + 1D10${s.diff ? ` · 난이도 ${s.diff}` : ""}${s.why ? ` — ${s.why}` : ""}`));
       }
       if (s.kind === "rollreq") return h("div", {}, h("span", { class: "rollreq" }, `🎲 GM 굴림 요청 · ${s.expr}  ${s.why}`));
+      if (s.kind === "hp") {
+        const a = s.applied, heal = s.op === "HEAL";
+        return h("div", {}, h("span", { class: `hpchange ${heal ? "heal" : ""}` },
+          `${heal ? "💚" : "🩸"} ${a?.who || s.who} ${heal ? "회복" : "피해"} ${heal ? "−" : "+"}${s.amount}`,
+          a && a.after !== null && a.after !== undefined ? ` → 누적 ${a.after}/40 (${woundOf(a.after)})` : a?.skipped ? ` (반영 안 됨: ${a.skipped})` : "",
+          s.why ? ` — ${s.why}` : ""));
+      }
       if (s.kind === "gm") return null;   // GM 메모는 오른쪽 패널에만 표시
       return h("div", { class: "text", html: md(s.text) });
     }));
@@ -1367,6 +1385,7 @@ function viewPlay() {
         h("div", { class: "track" }, "피해", h("button", { class: "sm", onclick: () => setS("damage", Math.max(0, (s.damage || 0) - 1)) }, "−"),
           h("b", { class: "mono" }, s.damage || 0), h("button", { class: "sm", onclick: () => setS("damage", Math.min(40, (s.damage || 0) + 1)) }, "＋"),
           h("span", { class: "wound", style: `background:${(s.damage || 0) > 12 ? "#5a1020" : (s.damage || 0) > 4 ? "#4a3a10" : "#123a24"}` }, woundOf(s.damage))),
+        woundLine(ch, s.damage),
         h("div", { class: "track" }, `LUCK ${Math.max(0, (ch.stats.LUCK || 0) - (s.luck_used || 0))}/${ch.stats.LUCK}`,
           h("button", { class: "sm ghost", title: "세션 시작 시 회복", onclick: () => setS("luck_used", 0) }, "회복"),
           h("span", { class: "dim" }, ` BTM ${ch.derived.btm} · 휴머니티 ${ch.derived.humanity}`)));
@@ -1409,11 +1428,11 @@ function viewPlay() {
       h("span", { style: "flex:1" }),
       h("button", { class: "sm ghost", disabled: S.play.busy, onclick: async () => {
         const r = await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/play/retry`, { session: S.play.session }));
-        if (r) { S.play.log.pop(); S.play.log.push(...r.new); S.play.pendingRolls = r.pending_rolls || 0; render(); }
+        if (r) { S.play.log.pop(); S.play.log.push(...r.new); S.play.pendingRolls = r.pending_rolls || 0; await refreshCamp(); render(); }
       } }, "↻ 다시 생성"),
       h("button", { class: "sm ghost", disabled: S.play.busy, onclick: async () => {
         if (!confirm("마지막 주고받기를 취소할까요? (이미 Notion 에 기록된 내용은 남습니다)")) return;
-        await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/play/undo`, { session: S.play.session })); await loadPlay();
+        await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/play/undo`, { session: S.play.session })); await refreshCamp(); await loadPlay();
       } }, "↶ 취소")),
     h("div", { class: "row", style: "align-items:stretch" }, h("div", { style: "flex:1" }, ta),
       h("button", { class: "primary", disabled: S.play.busy || !aiReady(), onclick: submit }, S.play.busy ? "…" : "보내기")));

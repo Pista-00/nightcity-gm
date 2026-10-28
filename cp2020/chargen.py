@@ -260,6 +260,6 @@ def gm_summary(ch: dict) -> str:
                               if k != role.get('special')}, st),
         "사이버웨어: " + (", ".join(c.get("name", "") for c in ch.get("cyberware", [])) or "없음"),
         "장비: " + (" / ".join(g.strip() for g in str(ch.get("gear", "")).splitlines() if g.strip()) or "-"),
-        f"상태: 피해 {s.get('damage', 0)}/40, LUCK 사용 {s.get('luck_used', 0)}/{st.get('LUCK', 0)}, Rep {s.get('rep', 0)}",
+        f"상태: 피해 {s.get('damage', 0)}/40(현재 누적값 – DAMAGE·HEAL 반영 완료), LUCK 사용 {s.get('luck_used', 0)}/{st.get('LUCK', 0)}, Rep {s.get('rep', 0)}",
         "라이프패스 훅: " + ("; ".join(hooks[:5]) or "-"),
     ])

@@ -21,7 +21,8 @@ ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
 ROLL_RE = re.compile(r"\[\[ROLL\s+([^|\]]+?)\s*(?:\|\s*([^\]]*))?\]\]")
 GM_RE = re.compile(r"\[\[GM\s+(.*?)\]\]", re.S)
 CHECK_RE = re.compile(r"\[\[CHECK(?P<attrs>[^\]|]*)(?:\|\s*(?P<why>[^\]]*))?\]\]")
-TOKEN_RE = re.compile(r"(\[\[SCENE[^\]]*\]\].*?\[\[/SCENE\]\]|\[\[ROLL\s+[^\]]+\]\]|\[\[CHECK[^\]]*\]\]|\[\[GM\s+.*?\]\])", re.S)
+HP_RE = re.compile(r"\[\[(?P<op>DAMAGE|HEAL)(?P<attrs>[^\]|]*)(?:\|\s*(?P<why>[^\]]*))?\]\]")
+TOKEN_RE = re.compile(r"(\[\[SCENE[^\]]*\]\].*?\[\[/SCENE\]\]|\[\[ROLL\s+[^\]]+\]\]|\[\[CHECK[^\]]*\]\]|\[\[(?:DAMAGE|HEAL)[^\]]*\]\]|\[\[GM\s+.*?\]\])", re.S)
 
 INSTRUCTIONS = """\
 너는 TRPG **사이버펑크 2020 (Cyberpunk 2.0.2.0)** 의 레퍼리(GM)다.
@@ -51,6 +52,8 @@ INSTRUCTIONS = """\
   부위·피해는 버린다. 같은 차례에 행동하는 NPC 여러 명의 굴림도 한꺼번에 요청하라(왕복을 줄이기 위해).
 - 1D10 자연 10 = 크리티컬(1D10 추가), 자연 1 = 펌블. 프로그램이 표시해 준다.
 - 피해 처리: 부위(1D10) → 방어구 SP → 머리면 2배 → BTM → 상처 단계 → Stun/Death Save.
+- 플레이어 캐릭터가 피해를 입거나 회복하면 반드시 DAMAGE / HEAL 태그를 쓴다(아래 출력 규약 6). 프로그램이 파티 현황의 피해 칸에
+  자동 반영한다. [플레이어 캐릭터]의 '상태: 피해 N/40' 은 네가 이미 낸 DAMAGE·HEAL 이 반영된 현재 누적값이다 – 다시 더하지 마라.
 
 ## 출력 규약 (프로그램이 읽는다 – 형식을 정확히)
 1) 장면이 바뀔 때(장소 이동, 시간 경과, 전투 시작처럼 분위기가 크게 바뀔 때)만 장면 블록을 연다:
@@ -68,6 +71,11 @@ INSTRUCTIONS = """\
    - skill 은 영어 스킬 이름 그대로(없으면 skill=""). diff 는 난이도(10/15/20/25/30), 대항 판정이면 diff 에 상대 값(모르면 diff="").
    - mod 는 상황 수정치만(없으면 0). 솔로의 Combat Sense(인지 판정)는 프로그램이 자동으로 더하므로 mod 에 넣지 마라.
    - 대항 판정에서 상대의 숨은 굴림이 먼저 필요하면 ROLL 결과를 받은 뒤 CHECK 를 한 번만 내라. 여러 명이 굴리면 태그를 여러 줄.
+6) 플레이어 캐릭터의 피해·회복: 한 줄에 하나씩
+[[DAMAGE who="핸들" amount="7" | 몸통, SP14 관통 후 BTM -2]]
+[[HEAL who="핸들" amount="2" | 메드테크 치료]]
+   - amount 는 최종 피해 점수(방어구 SP 를 빼고, 머리면 2배, BTM 을 뺀 값. 관통했으면 최소 1). 0 이면 쓰지 않는다.
+   - 피해 굴림 결과를 받은 뒤에만 쓴다. NPC 피해에는 쓰지 않는다(필요하면 GM 메모).
 """
 
 
@@ -170,6 +178,11 @@ def segments(text: str, scene_ids=None) -> list[dict]:
             out.append({"kind": "check", "who": a.get("who", ""), "stat": a.get("stat", "").upper(),
                         "skill": a.get("skill", ""), "diff": a.get("diff", ""), "mod": a.get("mod", "0"),
                         "why": ((m.group("why") if m else "") or "").strip()})
+        elif part.startswith(("[[DAMAGE", "[[HEAL")):
+            m = HP_RE.match(part)
+            a = dict(ATTR_RE.findall(m.group("attrs"))) if m else {}
+            out.append({"kind": "hp", "op": m.group("op") if m else "", "who": a.get("who", ""), "amount": a.get("amount", ""),
+                        "why": ((m.group("why") if m else "") or "").strip()})
         elif part.startswith("[[GM"):
             out.append({"kind": "gm", "text": GM_RE.match(part).group(1).strip()})
         elif part.strip():
@@ -181,6 +194,10 @@ def view(item: dict) -> dict:
     v = {k: item.get(k) for k in ("role", "time", "kind", "actor")}
     if item["role"] == "assistant":
         v["segments"] = segments(item["content"], item.get("scenes"))
+        changes = list(item.get("status_changes") or [])
+        for seg in v["segments"]:          # 실제로 반영된 결과(누적 피해)를 붙임
+            if seg["kind"] == "hp" and changes:
+                seg["applied"] = changes.pop(0)
     else:
         v["text"] = item["content"]
     return v
@@ -215,7 +232,45 @@ class Game:
         for m in SCENE_RE.finditer(reply):
             sc = self.c.save_scene(dict(ATTR_RE.findall(m.group("attrs"))), m.group("body"))
             scene_ids.append(sc["id"])
-        return [self.tr.add("assistant", reply, scenes=scene_ids)]
+        changes = self._apply_hp(reply)
+        return [self.tr.add("assistant", reply, scenes=scene_ids, **({"status_changes": changes} if changes else {}))]
+
+    def _find_pc(self, who: str):
+        w = (who or "").strip().lower()
+        chars = self.c.characters()
+        return next((ch for ch in chars if w and w in (str(ch.get("handle", "")).lower(), str(ch.get("name", "")).lower())), None) \
+            or next((ch for ch in chars if w and (w in str(ch.get("handle", "")).lower() or str(ch.get("handle", "")).lower() in w)), None)
+
+    def _apply_hp(self, reply: str) -> list[dict]:
+        """DAMAGE / HEAL 태그를 캐릭터 상태(피해 0~40)에 반영하고, 되돌릴 수 있게 실제 변화량을 돌려준다."""
+        out = []
+        for m in HP_RE.finditer(reply):
+            a = dict(ATTR_RE.findall(m.group("attrs")))
+            ch = self._find_pc(a.get("who", ""))
+            try:
+                amt = abs(int(float(re.sub(r"[^\d.\-]", "", a.get("amount", "")) or 0)))
+            except ValueError:
+                amt = 0
+            if not ch or not amt:
+                out.append({"who": a.get("who", ""), "delta": 0, "after": None, "skipped": "캐릭터를 찾지 못함" if not ch else "0"})
+                continue
+            st = dict(ch.get("status") or {})
+            before = int(st.get("damage", 0) or 0)
+            after = max(0, min(40, before + (amt if m.group("op") == "DAMAGE" else -amt)))
+            st["damage"] = after
+            ch["status"] = st
+            self.c.save_character(ch)
+            out.append({"id": ch["id"], "who": ch.get("handle", ""), "delta": after - before, "after": after})
+        return out
+
+    def _revert_hp(self, item: dict) -> None:
+        for chg in reversed(item.get("status_changes") or []):
+            ch = self.c.character(chg.get("id", "")) if chg.get("delta") else None
+            if ch:
+                st = dict(ch.get("status") or {})
+                st["damage"] = max(0, min(40, int(st.get("damage", 0) or 0) - chg["delta"]))
+                ch["status"] = st
+                self.c.save_character(ch)
 
     def turn(self, text: str, actor: str = "", kind: str = "player") -> list[dict]:
         prov = self.provider()
@@ -237,6 +292,10 @@ class Game:
                     lines.append(f"- {why.strip() or expr}: {dice.roll(expr, crit=not NO_CRIT_RE.search(why or ''))['text']}")
                 except dice.DiceError as e:
                     lines.append(f"- {why.strip() or expr}: 굴림 실패 ({e})")
+            applied = (new[-1] if new else (self.tr.items[-1] if self.tr.items else {})).get("status_changes") or []
+            for chg in applied:
+                if chg.get("after") is not None:
+                    lines.append(f"- [프로그램 반영 완료] {chg['who']} 피해 {chg['delta']:+d} → 현재 누적 {chg['after']}/40 (다시 더하지 말 것)")
             new.append(self.tr.add("user", "[프로그램 주사위 결과 – GM 요청분]\n" + "\n".join(lines), kind="auto_roll"))
             reply = self._call(prov)
             new += self._assistant(reply)
@@ -256,7 +315,7 @@ class Game:
     def retry(self) -> list[dict]:
         if not self.tr.items or self.tr.items[-1]["role"] != "assistant":
             raise RuntimeError("다시 생성할 응답이 없습니다.")
-        self.tr.items.pop()
+        self._revert_hp(self.tr.items.pop())
         self.tr.rewrite()
         prov = self.provider()
         reply = self._call(prov)
@@ -266,6 +325,7 @@ class Game:
         n = 0
         while self.tr.items:
             it = self.tr.items.pop()
+            self._revert_hp(it)
             n += 1
             if it["role"] == "user" and it.get("kind") != "auto_roll":
                 break

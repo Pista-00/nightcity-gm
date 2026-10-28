@@ -257,3 +257,6 @@ body.hide-gm .gmnote { display: none; }
 .pick-row { display: flex; gap: 10px; align-items: center; padding: 7px 6px; border-bottom: 1px solid #1d2238; }
 .pick-row:hover { background: #121726; }
 .pick-row.over { opacity: .5; }
+
+.hpchange { display: inline-block; font: 12px var(--mono); color: #ff6b8b; border: 1px dashed #7a2a40; background: #2a0f18; padding: 2px 8px; border-radius: 6px; margin: 4px 0; }
+.hpchange.heal { color: #5be08f; border-color: #1d6a40; background: #0f2a1a; }
