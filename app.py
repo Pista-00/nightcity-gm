@@ -488,6 +488,17 @@ def chargen_ai(cid):
                                        b.get("character", {}).get("stat_pool") or {}))
 
 
+@app.post("/api/campaign/<cid>/chargen/lifepath_ai")
+def chargen_lifepath_ai(cid):
+    """라이프패스를 굴린 뒤(또는 지금 결과를) AI 초안·콘셉트와 엮음."""
+    campaign(cid)
+    b = body()
+    try:
+        return jsonify(engine.ai_lifepath(b.get("character") or {}, b.get("lifepath") or None))
+    except RuntimeError as e:
+        abort(400, str(e))
+
+
 @app.post("/api/campaign/<cid>/character")
 def save_character(cid):
     c = campaign(cid)

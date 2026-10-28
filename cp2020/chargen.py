@@ -233,7 +233,7 @@ def to_markdown(ch: dict, full=True) -> str:
                   + (" – 현재 실직 중" if m.get("unemployed") else ""), ""]
     lp = ch.get("lifepath") or {}
     if full and lp:
-        lines += ["## 라이프패스", f"- 스타일: {lp.get('style', '')}", f"- 출신: {lp.get('ethnic', '')}"]
+        lines += ["## 라이프패스"] + ([lp["story"], ""] if lp.get("story") else []) + [f"- 스타일: {lp.get('style', '')}", f"- 출신: {lp.get('ethnic', '')}"]
         lines += [f"- {x}" for x in lp.get("family", [])] + [f"- {x}" for x in lp.get("motivations", [])]
         ev = [e for e in lp.get("events", []) if "별일 없는" not in e.get("text", "")]
         if ev:
@@ -262,4 +262,5 @@ def gm_summary(ch: dict) -> str:
         "장비: " + (" / ".join(g.strip() for g in str(ch.get("gear", "")).splitlines() if g.strip()) or "-"),
         f"상태: 피해 {s.get('damage', 0)}/40(현재 누적값 – DAMAGE·HEAL 반영 완료), LUCK 사용 {s.get('luck_used', 0)}/{st.get('LUCK', 0)}, Rep {s.get('rep', 0)}",
         "라이프패스 훅: " + ("; ".join(hooks[:5]) or "-"),
+        *([f"배경 이야기: {str(lp['story'])[:600]}"] if lp.get("story") else []),
     ])

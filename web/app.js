@@ -432,6 +432,24 @@ async function deleteCampaign(c) {
   render();
 }
 
+// 라이프패스: 콘셉트나 AI 초안이 있으면 AI 가 굴린 결과를 그 내용과 엮음
+const hasDraftInfo = (d) => !!(String(d.concept || "").trim() || String(d.notes || "").trim() || (d.handle && d.role));
+async function linkLifepath(d, current) {
+  if (!aiReady()) return toast("① 에서 AI 를 연결하면 쓸 수 있어요.", "err");
+  S.lpBusy = true; render();
+  try {
+    const ch = draftToChar(d);
+    delete ch.lifepath;
+    const r = await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/chargen/lifepath_ai`, { character: ch, lifepath: current }));
+    if (r) {
+      if (S.draft !== d) return;
+      d.lifepath = r.lifepath; if (!d.age) d.age = r.lifepath.age;
+      toast("라이프패스를 콘셉트·AI 초안과 엮었습니다. ‘(콘셉트 반영)’ 표시는 주사위 결과를 바꾼 줄입니다.", "ok");
+      markDirty();
+    }
+  } finally { S.lpBusy = false; render(); }
+}
+
 function viewCampaign() {
   const name = h("input", { type: "text", class: "wide", placeholder: "예) 나이트시티 첫 캠페인" });
   const page = h("input", { type: "url", class: "wide", placeholder: "https://www.notion.so/… (나중에 넣어도 됨)" });
@@ -943,13 +961,20 @@ function editor() {
   const lines = (arr) => (arr || []).join("\n");
   const lifepath = h("div", { class: "card" },
     h("div", { class: "row", style: "justify-content:space-between" }, h("h3", { style: "margin:0" }, "라이프패스 (배경)"),
-      h("button", { class: "cyan sm", onclick: async () => {
-        if (lp && !confirm("라이프패스를 새로 굴릴까요? 고친 내용은 사라집니다.")) return;
-        const r = await guard(() => POST("/api/chargen/lifepath", { age: d.age || null }));
-        if (r) { d.lifepath = r; if (!d.age) d.age = r.age; render(); }
-      } }, lp ? "다시 굴리기" : "🎲 라이프패스 굴리기")),
+      h("div", { class: "row" },
+        hasDraftInfo(d) ? h("label", { class: "check small", title: "주사위로 굴린 뒤, AI 가 위의 콘셉트·AI 초안과 이어지게 구체화합니다" },
+          h("input", { type: "checkbox", checked: S.lpLink !== false, onchange: (e) => { S.lpLink = e.target.checked; render(); } }), "콘셉트·AI 초안과 엮기") : null,
+        lp && hasDraftInfo(d) ? h("button", { class: "sm ghost", disabled: S.lpBusy || !aiReady(), title: "다시 굴리지 않고 지금 결과를 콘셉트와 엮습니다",
+          onclick: () => linkLifepath(d, lp) }, "✨ 지금 결과 엮기") : null,
+        h("button", { class: "cyan sm", disabled: S.lpBusy, onclick: async () => {
+          if (lp && !confirm("라이프패스를 새로 굴릴까요? 고친 내용은 사라집니다.")) return;
+          if (hasDraftInfo(d) && S.lpLink !== false && aiReady()) return linkLifepath(d, null);
+          const r = await guard(() => POST("/api/chargen/lifepath", { age: d.age || null }));
+          if (r) { d.lifepath = r; if (!d.age) d.age = r.age; markDirty(); render(); }
+        } }, S.lpBusy ? "AI 가 엮는 중…" : lp ? "다시 굴리기" : "🎲 라이프패스 굴리기"))),
     h("p", { class: "dim small" }, "표를 굴려 배경을 만듭니다. 적·빚·옛 연인은 AI GM 이 이야기에 엮습니다. 마음대로 고쳐도 됩니다."),
     lp ? h("div", {},
+      lp.story !== undefined ? field("배경 이야기" + (lp.linked ? " (콘셉트·AI 초안과 엮음)" : ""), h("textarea", { rows: 4, oninput: (e) => (lp.story = e.target.value) }, lp.story || "")) : null,
       field("스타일", h("input", { type: "text", class: "wide", value: lp.style, oninput: (e) => (lp.style = e.target.value) })),
       field("출신 · 모국어", h("input", { type: "text", class: "wide", value: lp.ethnic, oninput: (e) => (lp.ethnic = e.target.value) })),
       h("div", { class: "grid2" },

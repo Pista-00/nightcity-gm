@@ -420,3 +420,57 @@ JSON 객체 하나만 출력: {{"handle","name","age","role","stats":{{}},"caree
     ch = {**base, **{k: v for k, v in data.items() if v not in (None, "")}}
     ch["stats"] = {k: int(ch.get("stats", {}).get(k, 0) or 0) for k in D.STAT_KEYS}
     return {"character": ch, "problems": chargen.validate(ch, method, points)}
+
+def ai_lifepath(character: dict, lifepath: dict | None = None) -> dict:
+    """라이프패스를 굴리고(또는 받은 결과를 쓰고) AI 초안·콘셉트와 이어지게 다듬는다. 주사위 결과가 기본."""
+    rolled = lifepath or chargen.roll_lifepath(int(character["age"]) if str(character.get("age") or "").isdigit() else None)
+    s = store.settings()
+    prov = ai_providers.create(s.get("provider") or "claude-code", s.get("model", ""), max_tokens=3000)
+    if prov.missing() or not prov.model:
+        raise RuntimeError("먼저 ① 에서 AI 를 연결하세요.")
+    info = {k: character.get(k) for k in ("handle", "name", "age", "role", "concept", "notes", "career", "cyberware", "gear")
+            if character.get(k)}
+    prompt = f"""사이버펑크 2020 캐릭터의 라이프패스를 주사위로 굴렸다. 이 결과를 캐릭터의 콘셉트·초안과 자연스럽게 이어지게 다듬어라.
+
+[캐릭터 콘셉트·초안]
+{json.dumps(info, ensure_ascii=False)}
+
+[주사위 결과]
+{json.dumps({k: rolled.get(k) for k in ("style", "ethnic", "family", "motivations", "events")}, ensure_ascii=False)}
+
+규칙
+- 주사위 결과가 기본이다. 콘셉트·초안과 정면으로 모순되는 항목만 콘셉트에 맞게 바꾸고 그 줄 끝에 '(콘셉트 반영)' 을 붙인다. 바꾸는 줄은 전체의 3분의 1 이하.
+- 나머지는 결과를 유지하면서 구체화한다: 누가(이름·관계), 어디서, 왜를 콘셉트와 엮어 한 줄로.
+  예) "적 – 옛 친구 / 원인: 배신" → "적 – 옛 친구 레이(같은 일족 출신) / 원인: 일족 트럭을 팔아넘긴 걸 내가 고발함"
+- family, motivations 는 같은 순서·같은 줄 수의 문자열 배열. 각 줄의 '항목명: ' 머리(예 '가문: ', '성격: ')는 그대로 둔다.
+- events 는 주사위 결과와 같은 개수, 같은 나이, 같은 종류(행운/재난/친구/적/연애/별일 없는 한 해)를 유지하고 내용만 구체화한다.
+- 어느 줄에도 플레이어 캐릭터의 앞으로의 선택을 정하지 않는다. 한국어.
+- story: 위 내용을 엮은 배경 이야기 4~6문장.
+
+JSON 하나만 출력: {{"style": "", "ethnic": "", "family": [], "motivations": [], "events": [{{"age": 0, "text": ""}}], "story": ""}}"""
+    system = [("너는 사이버펑크 2020 캐릭터의 배경을 다듬는 도우미다. 요청한 JSON 만 출력한다.", False)]
+    data, err = None, ""
+    for attempt in range(2):
+        reply = prov.chat(system, [{"role": "user", "content": prompt + (jsonfix.RETRY_HINT.format(err=err) if attempt else "")}])
+        data, err = jsonfix.extract(reply)
+        if data is not None:
+            break
+    if data is None:
+        raise RuntimeError(err + ". 다시 시도하세요.")
+    lp = dict(rolled)
+    for k in ("style", "ethnic"):
+        if isinstance(data.get(k), str) and data[k].strip():
+            lp[k] = data[k].strip()
+    for k in ("family", "motivations"):
+        v = data.get(k)
+        if isinstance(v, list) and len(v) == len(rolled.get(k) or []) and all(isinstance(x, str) and x.strip() for x in v):
+            lp[k] = [x.strip() for x in v]
+    ev = data.get("events")
+    if isinstance(ev, list) and len(ev) == len(rolled.get("events") or []):
+        lp["events"] = [{"age": r["age"], "text": str((e or {}).get("text") or r["text"]).strip()}
+                        for r, e in zip(rolled["events"], ev)]
+    if isinstance(data.get("story"), str):
+        lp["story"] = data["story"].strip()
+    lp["linked"] = True
+    return {"lifepath": lp, "rolled": rolled}
+
