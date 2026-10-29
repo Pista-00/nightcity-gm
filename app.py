@@ -553,6 +553,14 @@ def char_status(cid, chid):
     for k in ("damage", "luck_used", "rep", "ip", "cash"):
         if k in body():
             st[k] = int(body()[k] or 0)
+    b = body()
+    if isinstance(b.get("conditions"), list):
+        st["conditions"] = [{"name": str(c.get("name", ""))[:60], "kind": "버프" if c.get("kind") == "버프" else "상태이상",
+                             "why": str(c.get("why", ""))[:120]} for c in b["conditions"] if isinstance(c, dict) and c.get("name")]
+    if isinstance(b.get("loc_damage"), dict):
+        st["loc_damage"] = {k: max(0, int(v or 0)) for k, v in b["loc_damage"].items() if k in engine.LOC_NAMES and int(v or 0) > 0}
+    if isinstance(b.get("severed"), list):
+        st["severed"] = [k for k in b["severed"] if k in engine.LOC_NAMES]
     ch["status"] = st
     return jsonify(c.save_character(ch))
 

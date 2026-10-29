@@ -18,11 +18,29 @@ MAX_AUTO_ROLL = 6   # 한 번 입력에 자동 굴림→이어 쓰기 반복 상
 
 SCENE_RE = re.compile(r"\[\[SCENE(?P<attrs>[^\]]*)\]\](?P<body>.*?)\[\[/SCENE\]\]", re.S)
 ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
+LOC_NAMES = {"head": "머리", "torso": "몸통", "rarm": "오른팔", "larm": "왼팔", "rleg": "오른다리", "lleg": "왼다리"}
+
+
+def loc_key(text: str) -> str:
+    """'오른팔', 'R.Arm', 'left leg' 등 → head/torso/rarm/larm/rleg/lleg (모르면 '')."""
+    t = (text or "").lower().replace(" ", "")
+    if not t:
+        return ""
+    if any(k in t for k in ("머리", "head", "얼굴", "목")):
+        return "head"
+    if any(k in t for k in ("몸통", "가슴", "배", "torso", "chest", "body", "등")):
+        return "torso"
+    side = "l" if any(k in t for k in ("왼", "left", "l.")) or t.startswith("l") and ("arm" in t or "leg" in t) else "r"
+    if "팔" in t or "arm" in t or "손" in t:
+        return side + "arm"
+    if "다리" in t or "leg" in t or "발" in t:
+        return side + "leg"
+    return ""
 ROLL_RE = re.compile(r"\[\[ROLL\s+([^|\]]+?)\s*(?:\|\s*([^\]]*))?\]\]")
 GM_RE = re.compile(r"\[\[GM\s+(.*?)\]\]", re.S)
 CHECK_RE = re.compile(r"\[\[CHECK(?P<attrs>[^\]|]*)(?:\|\s*(?P<why>[^\]]*))?\]\]")
-HP_RE = re.compile(r"\[\[(?P<op>DAMAGE|HEAL)(?P<attrs>[^\]|]*)(?:\|\s*(?P<why>[^\]]*))?\]\]")
-TOKEN_RE = re.compile(r"(\[\[SCENE[^\]]*\]\].*?\[\[/SCENE\]\]|\[\[ROLL\s+[^\]]+\]\]|\[\[CHECK[^\]]*\]\]|\[\[(?:DAMAGE|HEAL)[^\]]*\]\]|\[\[GM\s+.*?\]\])", re.S)
+HP_RE = re.compile(r"\[\[(?P<op>DAMAGE|HEAL|STATUS)(?P<attrs>[^\]|]*)(?:\|\s*(?P<why>[^\]]*))?\]\]")
+TOKEN_RE = re.compile(r"(\[\[SCENE[^\]]*\]\].*?\[\[/SCENE\]\]|\[\[ROLL\s+[^\]]+\]\]|\[\[CHECK[^\]]*\]\]|\[\[(?:DAMAGE|HEAL|STATUS)[^\]]*\]\]|\[\[GM\s+.*?\]\])", re.S)
 
 INSTRUCTIONS = """\
 너는 TRPG **사이버펑크 2020 (Cyberpunk 2.0.2.0)** 의 레퍼리(GM)다.
@@ -52,7 +70,7 @@ INSTRUCTIONS = """\
   부위·피해는 버린다. 같은 차례에 행동하는 NPC 여러 명의 굴림도 한꺼번에 요청하라(왕복을 줄이기 위해).
 - 1D10 자연 10 = 크리티컬(1D10 추가), 자연 1 = 펌블. 프로그램이 표시해 준다.
 - 피해 처리: 부위(1D10) → 방어구 SP → 머리면 2배 → BTM → 상처 단계 → Stun/Death Save.
-- 플레이어 캐릭터가 피해를 입거나 회복하면 반드시 DAMAGE / HEAL 태그를 쓴다(아래 출력 규약 6). 프로그램이 파티 현황의 피해 칸에
+- 플레이어 캐릭터가 피해를 입거나 회복하면 반드시 DAMAGE / HEAL 태그를, 상태이상·버프가 바뀌면 STATUS 태그를 쓴다(아래 출력 규약 6·7). 프로그램이 파티 현황에
   자동 반영한다. [플레이어 캐릭터]의 '상태: 피해 N/40' 은 네가 이미 낸 DAMAGE·HEAL 이 반영된 현재 누적값이다 – 다시 더하지 마라.
 
 ## 출력 규약 (프로그램이 읽는다 – 형식을 정확히)
@@ -72,10 +90,16 @@ INSTRUCTIONS = """\
    - mod 는 상황 수정치만(없으면 0). 솔로의 Combat Sense(인지 판정)는 프로그램이 자동으로 더하므로 mod 에 넣지 마라.
    - 대항 판정에서 상대의 숨은 굴림이 먼저 필요하면 ROLL 결과를 받은 뒤 CHECK 를 한 번만 내라. 여러 명이 굴리면 태그를 여러 줄.
 6) 플레이어 캐릭터의 피해·회복: 한 줄에 하나씩
-[[DAMAGE who="핸들" amount="7" | 몸통, SP14 관통 후 BTM -2]]
+[[DAMAGE who="핸들" amount="7" loc="몸통" | SP14 관통 후 BTM -2]]
 [[HEAL who="핸들" amount="2" | 메드테크 치료]]
    - amount 는 최종 피해 점수(방어구 SP 를 빼고, 머리면 2배, BTM 을 뺀 값. 관통했으면 최소 1). 0 이면 쓰지 않는다.
+   - loc 는 머리/몸통/오른팔/왼팔/오른다리/왼다리 중 하나(부위를 굴리지 않은 피해면 생략). 팔다리에 한 번에 8 초과면 프로그램이 절단으로 표시한다.
    - 피해 굴림 결과를 받은 뒤에만 쓴다. NPC 피해에는 쓰지 않는다(필요하면 GM 메모).
+7) 플레이어 캐릭터의 상태이상·버프가 생기거나 끝날 때: 한 줄에 하나씩
+[[STATUS who="핸들" add="기절" kind="상태이상" | Stun Save 실패]]
+[[STATUS who="핸들" add="Speedheal" kind="버프" | 치유 +1/일, 1주간 REF −1D6/3]]
+[[STATUS who="핸들" remove="기절" | Stun Save 성공으로 회복]]
+   - kind 는 상태이상 또는 버프. 이름은 짧게(기절, 안정화됨, 출혈, 약물 이름, 엄폐 중 등). 상처 단계 페널티는 프로그램이 계산하므로 쓰지 않는다.
 """
 
 
@@ -178,11 +202,16 @@ def segments(text: str, scene_ids=None) -> list[dict]:
             out.append({"kind": "check", "who": a.get("who", ""), "stat": a.get("stat", "").upper(),
                         "skill": a.get("skill", ""), "diff": a.get("diff", ""), "mod": a.get("mod", "0"),
                         "why": ((m.group("why") if m else "") or "").strip()})
-        elif part.startswith(("[[DAMAGE", "[[HEAL")):
+        elif part.startswith(("[[DAMAGE", "[[HEAL")) and HP_RE.match(part):
             m = HP_RE.match(part)
             a = dict(ATTR_RE.findall(m.group("attrs"))) if m else {}
             out.append({"kind": "hp", "op": m.group("op") if m else "", "who": a.get("who", ""), "amount": a.get("amount", ""),
-                        "why": ((m.group("why") if m else "") or "").strip()})
+                        "loc": a.get("loc", ""), "why": ((m.group("why") if m else "") or "").strip()})
+        elif part.startswith("[[STATUS"):
+            m = HP_RE.match(part)
+            a = dict(ATTR_RE.findall(m.group("attrs"))) if m else {}
+            out.append({"kind": "status", "who": a.get("who", ""), "add": a.get("add", ""), "remove": a.get("remove", ""),
+                        "type": a.get("kind", ""), "why": ((m.group("why") if m else "") or "").strip()})
         elif part.startswith("[[GM"):
             out.append({"kind": "gm", "text": GM_RE.match(part).group(1).strip()})
         elif part.strip():
@@ -196,7 +225,7 @@ def view(item: dict) -> dict:
         v["segments"] = segments(item["content"], item.get("scenes"))
         changes = list(item.get("status_changes") or [])
         for seg in v["segments"]:          # 실제로 반영된 결과(누적 피해)를 붙임
-            if seg["kind"] == "hp" and changes:
+            if seg["kind"] in ("hp", "status") and changes:
                 seg["applied"] = changes.pop(0)
     else:
         v["text"] = item["content"]
@@ -242,35 +271,76 @@ class Game:
             or next((ch for ch in chars if w and (w in str(ch.get("handle", "")).lower() or str(ch.get("handle", "")).lower() in w)), None)
 
     def _apply_hp(self, reply: str) -> list[dict]:
-        """DAMAGE / HEAL 태그를 캐릭터 상태(피해 0~40)에 반영하고, 되돌릴 수 있게 실제 변화량을 돌려준다."""
+        """DAMAGE / HEAL / STATUS 태그를 캐릭터 상태에 반영. 되돌릴 수 있게 바뀌기 전 상태를 함께 돌려준다."""
         out = []
         for m in HP_RE.finditer(reply):
+            op = m.group("op")
             a = dict(ATTR_RE.findall(m.group("attrs")))
             ch = self._find_pc(a.get("who", ""))
-            try:
-                amt = abs(int(float(re.sub(r"[^\d.\-]", "", a.get("amount", "")) or 0)))
-            except ValueError:
-                amt = 0
-            if not ch or not amt:
-                out.append({"who": a.get("who", ""), "delta": 0, "after": None, "skipped": "캐릭터를 찾지 못함" if not ch else "0"})
+            if not ch:
+                out.append({"who": a.get("who", ""), "delta": 0, "after": None, "skipped": "캐릭터를 찾지 못함"})
                 continue
-            st = dict(ch.get("status") or {})
-            before = int(st.get("damage", 0) or 0)
-            after = max(0, min(40, before + (amt if m.group("op") == "DAMAGE" else -amt)))
-            st["damage"] = after
+            before = json.loads(json.dumps(ch.get("status") or {}))
+            st = json.loads(json.dumps(before))
+            rec = {"id": ch["id"], "who": ch.get("handle", ""), "before": before}
+            if op == "STATUS":
+                conds = [c for c in st.get("conditions", []) if isinstance(c, dict)]
+                rm = (a.get("remove") or "").strip()
+                if rm:
+                    conds = [c for c in conds if rm.lower() not in str(c.get("name", "")).lower()]
+                add = (a.get("add") or "").strip()
+                if add and not any(add.lower() == str(c.get("name", "")).lower() for c in conds):
+                    conds.append({"name": add, "kind": "버프" if "버프" in (a.get("kind") or "") else "상태이상",
+                                  "why": (m.group("why") or "").strip()[:120]})
+                st["conditions"] = conds
+                rec.update(op="STATUS", add=add, remove=rm)
+            else:
+                try:
+                    amt = abs(int(float(re.sub(r"[^\d.\-]", "", a.get("amount", "")) or 0)))
+                except ValueError:
+                    amt = 0
+                if not amt:
+                    out.append({"who": a.get("who", ""), "delta": 0, "after": None, "skipped": "0"})
+                    continue
+                dmg0 = int(st.get("damage", 0) or 0)
+                st["damage"] = max(0, min(40, dmg0 + (amt if op == "DAMAGE" else -amt)))
+                locd = {k: int(v or 0) for k, v in (st.get("loc_damage") or {}).items()}
+                key = loc_key(a.get("loc", ""))
+                if op == "DAMAGE":
+                    if key:
+                        locd[key] = locd.get(key, 0) + amt
+                        if amt > 8 and key != "head" and key not in st.get("severed", []):
+                            st["severed"] = st.get("severed", []) + [key]
+                            rec["severed"] = key
+                else:                       # 회복: 지정 부위 → 없으면 피해가 큰 부위부터
+                    left = amt
+                    for k in ([key] if key else []) + sorted(locd, key=lambda x: -locd[x]):
+                        if left <= 0:
+                            break
+                        take = min(left, locd.get(k, 0))
+                        locd[k] = locd.get(k, 0) - take
+                        left -= take
+                st["loc_damage"] = {k: v for k, v in locd.items() if v > 0}
+                rec.update(delta=st["damage"] - dmg0, after=st["damage"], loc=key or "")
             ch["status"] = st
             self.c.save_character(ch)
-            out.append({"id": ch["id"], "who": ch.get("handle", ""), "delta": after - before, "after": after})
+            out.append(rec)
         return out
 
     def _revert_hp(self, item: dict) -> None:
         for chg in reversed(item.get("status_changes") or []):
-            ch = self.c.character(chg.get("id", "")) if chg.get("delta") else None
-            if ch:
+            ch = self.c.character(chg.get("id", "")) if chg.get("id") else None
+            if not ch:
+                continue
+            if "before" in chg:
+                ch["status"] = chg["before"]
+            elif chg.get("delta"):          # 예전 형식(피해 변화량만 기록)
                 st = dict(ch.get("status") or {})
                 st["damage"] = max(0, min(40, int(st.get("damage", 0) or 0) - chg["delta"]))
                 ch["status"] = st
-                self.c.save_character(ch)
+            else:
+                continue
+            self.c.save_character(ch)
 
     def turn(self, text: str, actor: str = "", kind: str = "player") -> list[dict]:
         prov = self.provider()

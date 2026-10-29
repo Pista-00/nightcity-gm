@@ -244,6 +244,9 @@ def to_markdown(ch: dict, full=True) -> str:
     return "\n".join(lines)
 
 
+LOC_KO = {"head": "머리", "torso": "몸통", "rarm": "오른팔", "larm": "왼팔", "rleg": "오른다리", "lleg": "왼다리"}
+
+
 def gm_summary(ch: dict) -> str:
     """AI GM 에게 줄 압축 시트."""
     st, dv = ch.get("stats", {}), derived(ch)
@@ -260,6 +263,9 @@ def gm_summary(ch: dict) -> str:
                               if k != role.get('special')}, st),
         "사이버웨어: " + (", ".join(c.get("name", "") for c in ch.get("cyberware", [])) or "없음"),
         "장비: " + (" / ".join(g.strip() for g in str(ch.get("gear", "")).splitlines() if g.strip()) or "-"),
+        *([("부위별 받은 피해: " + ", ".join(f"{LOC_KO.get(k, k)} {v}" for k, v in s["loc_damage"].items()))] if s.get("loc_damage") else []),
+        *([("절단·파괴된 부위: " + ", ".join(LOC_KO.get(k, k) for k in s["severed"]))] if s.get("severed") else []),
+        *([("상태이상·버프: " + "; ".join(f"{c.get('name')}({c.get('kind', '')}{' – ' + c['why'] if c.get('why') else ''})" for c in s["conditions"]))] if s.get("conditions") else []),
         f"상태: 피해 {s.get('damage', 0)}/40(현재 누적값 – DAMAGE·HEAL 반영 완료), LUCK 사용 {s.get('luck_used', 0)}/{st.get('LUCK', 0)}, Rep {s.get('rep', 0)}",
         "라이프패스 훅: " + ("; ".join(hooks[:5]) or "-"),
         *([f"배경 이야기: {str(lp['story'])[:600]}"] if lp.get("story") else []),

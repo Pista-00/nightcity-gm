@@ -1248,10 +1248,14 @@ function renderItem(it) {
       if (s.kind === "hp") {
         const a = s.applied, heal = s.op === "HEAL";
         return h("div", {}, h("span", { class: `hpchange ${heal ? "heal" : ""}` },
-          `${heal ? "💚" : "🩸"} ${a?.who || s.who} ${heal ? "회복" : "피해"} ${heal ? "−" : "+"}${s.amount}`,
+          `${heal ? "💚" : "🩸"} ${a?.who || s.who}${s.loc ? ` ${s.loc}` : ""} ${heal ? "회복" : "피해"} ${heal ? "−" : "+"}${s.amount}`,
+          a?.severed ? ` · ${LOC_KO[a.severed]} 절단!` : "",
           a && a.after !== null && a.after !== undefined ? ` → 누적 ${a.after}/40 (${woundOf(a.after)})` : a?.skipped ? ` (반영 안 됨: ${a.skipped})` : "",
           s.why ? ` — ${s.why}` : ""));
       }
+      if (s.kind === "status") return h("div", {}, h("span", { class: "statuschg" },
+        `${s.type === "버프" ? "✨" : "⚠"} ${s.applied?.who || s.who} 상태: ${s.add ? "+" + s.add : ""}${s.add && s.remove ? " / " : ""}${s.remove ? "−" + s.remove : ""}`,
+        s.applied?.skipped ? ` (반영 안 됨: ${s.applied.skipped})` : "", s.why ? ` — ${s.why}` : ""));
       if (s.kind === "gm") return null;   // GM 메모는 오른쪽 패널에만 표시
       return h("div", { class: "text", html: md(s.text) });
     }));
@@ -1419,23 +1423,119 @@ function diceBox(chars) {
   return box;
 }
 
+
+// ---- 파티 카드 상세: 부위별 방어구·피해, 상태이상·버프, 현재 능력치
+const LOCS = [["head", "머리"], ["torso", "몸통"], ["rarm", "오른팔"], ["larm", "왼팔"], ["rleg", "오른다리"], ["lleg", "왼다리"]];
+const LOC_KO = Object.fromEntries(LOCS);
+function armorLocs(text) {
+  const t = String(text || "").toLowerCase();
+  if (/전신|whole|full|all/.test(t)) return LOCS.map(([k]) => k);
+  const out = [];
+  if (/머리|head|헬멧|helmet/.test(t)) out.push("head");
+  if (/몸통|torso|body|가슴|조끼|vest/.test(t)) out.push("torso");
+  if (/팔|arm/.test(t)) out.push("rarm", "larm");
+  if (/다리|leg/.test(t)) out.push("rleg", "lleg");
+  return out;
+}
+// 겹쳐 입기(비례 방어): 큰 SP + 차이에 따른 보너스
+const layerSP = (a, b) => { if (!a || !b) return Math.max(a, b); const d = Math.abs(a - b);
+  return Math.max(a, b) + (d <= 4 ? 5 : d <= 8 ? 4 : d <= 14 ? 3 : d <= 20 ? 2 : d <= 26 ? 1 : 0); };
+function armorOf(ch) {
+  const sp = Object.fromEntries(LOCS.map(([k]) => [k, 0]));
+  let ev = 0;
+  const pieces = (ch.items || []).filter((i) => i.kind === "armor");
+  for (const it of pieces) {
+    const info = String(it.info || "");
+    const s = +(info.match(/SP\s*(\d+)/i) || [])[1] || 0;
+    ev += +(info.match(/EV\s*(\d+)/i) || [])[1] || 0;
+    for (const k of armorLocs(info.split(" · ")[0] + " " + it.name)) sp[k] = layerSP(sp[k], s);
+  }
+  return { sp, ev, pieces };
+}
+function effectiveStats(ch, dmg, ev) {
+  const lv = Math.min(10, Math.ceil((+dmg || 0) / 4));
+  const out = {};
+  for (const [k] of S.cg.stats) {
+    let v = +ch.stats[k] || 0;
+    if (["REF", "INT", "COOL"].includes(k)) {
+      if (lv === 3) v = Math.ceil(v / 2);
+      else if (lv >= 4) v = Math.ceil(v / 3);
+    }
+    if (k === "REF") v -= (lv === 2 ? 2 : 0) + ev;
+    out[k] = Math.max(0, v);
+  }
+  return out;
+}
+function pcDetail(ch, s, setS) {
+  const { sp, ev, pieces } = armorOf(ch);
+  const locd = s.loc_damage || {}, sev = s.severed || [];
+  const cell = (k, area) => {
+    const d = +locd[k] || 0, cut = sev.includes(k);
+    return h("div", { class: `loc ${cut ? "cut" : d >= 9 ? "hot" : d >= 5 ? "warm" : d ? "hit" : ""}`, style: `grid-area:${area}`,
+        title: cut ? "한 번에 8 초과 피해 – 절단·파괴" : "" },
+      h("b", {}, LOC_KO[k]), h("span", {}, `SP ${sp[k]}`), h("span", {}, cut ? "절단" : `피해 ${d}`));
+  };
+  const eff = effectiveStats(ch, s.damage, ev);
+  const role = S.cg.roles[ch.role] || {};
+  const special = role.special && (ch.career || {})[role.special] ? `${role.special} +${ch.career[role.special]}` : "";
+  const cyber = (ch.items || []).filter((i) => i.kind === "cyber");
+  const autoFx = [
+    special && /combat sense/i.test(special) ? `${special} – 선제권·인지 판정에 더함` : special ? `특수능력 ${special}` : "",
+    ev ? `방어구 EV ${ev} – REF −${ev}` : "",
+    ...cyber.map((c) => `${c.name}${String(c.info || "").split(" · ").slice(2).join(" · ") ? " – " + String(c.info).split(" · ").slice(2).join(" · ") : ""}`),
+  ].filter(Boolean);
+  const conds = s.conditions || [];
+  const newCond = h("input", { type: "text", placeholder: "상태 추가 (예: 출혈)", style: "flex:1;min-width:0;font-size:12px;padding:3px 6px" });
+  const kindSel = select([["상태이상", "상태이상"], ["버프", "버프"]], "상태이상", () => {}, { style: "font-size:12px;padding:2px" });
+  return h("div", { class: "pc-detail" },
+    h("div", { class: "sub" }, "부위별 (방어구 SP · 받은 피해)"),
+    h("div", { class: "body-grid" }, cell("head", "h"), cell("rarm", "ra"), cell("torso", "t"), cell("larm", "la"), cell("rleg", "rl"), cell("lleg", "ll")),
+    h("div", { class: "dim small" }, "체력은 온몸 공용 40점입니다. 부위 칸은 그 부위에 들어간 피해의 기록입니다.",
+      Object.keys(locd).length || sev.length ? h("button", { class: "sm ghost", style: "margin-left:6px", onclick: () => setS({ loc_damage: {}, severed: [] }) }, "부위 기록 지우기") : null),
+    h("div", { class: "sub" }, "상태이상 · 버프"),
+    conds.length ? h("div", { class: "chips" }, conds.map((c, i) => h("span", { class: `chip ${c.kind === "버프" ? "buff" : "debuff"}`, title: c.why || "" }, c.name,
+      h("button", { onclick: () => setS({ conditions: conds.filter((_, j) => j !== i) }) }, "✕")))) : h("div", { class: "dim small" }, "없음"),
+    h("div", { class: "row", style: "gap:4px;margin-top:4px;flex-wrap:nowrap" }, newCond, kindSel,
+      h("button", { class: "sm", onclick: () => { const n = newCond.value.trim(); if (n) setS({ conditions: [...conds, { name: n, kind: kindSel.value, why: "직접 추가" }] }); } }, "＋")),
+    h("div", { class: "sub" }, "효과 (자동)"),
+    autoFx.length ? h("ul", { class: "fx" }, autoFx.map((t) => h("li", {}, t))) : h("div", { class: "dim small" }, "없음"),
+    h("div", { class: "sub" }, "능력치 (현재)"),
+    h("div", { class: "st" }, S.cg.stats.map(([k]) => {
+      const base = +ch.stats[k] || 0, cur = eff[k];
+      return h("span", { title: cur !== base ? `기본 ${base} → 현재 ${cur} (상처·방어구 반영)` : "" }, `${k} `,
+        cur !== base ? h("b", { class: "err" }, `${cur}`) : h("b", {}, base), cur !== base ? h("s", { class: "dim" }, base) : null, "  ");
+    })),
+    pieces.length ? h("div", { class: "dim small" }, "방어구: " + pieces.map((p) => p.name).join(", ")) : null,
+    (ch.items || []).some((i) => i.kind === "weapon") ? h("div", { class: "dim small" }, "무기: " + ch.items.filter((i) => i.kind === "weapon").map((w) => `${w.name}${(String(w.info).match(/피해 [^ ·]+/) || [""])[0] ? " (" + String(w.info).match(/피해 [^ ·]+/)[0] + ")" : ""}`).join(", ")) : null);
+}
+
 function viewPlay() {
   const chars = S.camp.characters;
   const party = h("section", { class: "party" }, h("h3", {}, "파티"),
     chars.length ? null : h("p", { class: "dim small" }, "캐릭터가 없습니다. ③ 에서 만드세요."),
     chars.map((ch) => {
       const s = ch.status || {};
-      const setS = async (k, v) => { await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/character/${ch.id}/status`, { [k]: v })); await refreshCamp(); render(); };
-      return h("div", { class: "pc" },
-        h("div", { class: "name" }, ch.handle), h("div", { class: "role" }, `${S.cg.roles[ch.role]?.ko || ch.role} · ${ch.player || "NPC"}`),
-        h("div", { class: "st" }, S.cg.stats.map(([k]) => h("span", {}, `${k} `, h("b", {}, ch.stats[k]), "  "))),
+      const setS = async (k, v) => { await guard(() => POST(`/api/campaign/${encodeURIComponent(S.camp.id)}/character/${ch.id}/status`, typeof k === "object" ? k : { [k]: v })); await refreshCamp(); render(); };
+      S.pcOpen = S.pcOpen || {};
+      const open = !!S.pcOpen[ch.id];
+      const conds = s.conditions || [], sev = s.severed || [];
+      return h("div", { class: `pc ${open ? "open" : ""}` },
+        h("div", { class: "pc-head", onclick: () => { S.pcOpen[ch.id] = !open; render(); }, title: open ? "접기" : "자세히 보기" },
+          h("span", { class: "caret" }, open ? "▾" : "▸"),
+          h("div", { style: "flex:1;min-width:0" }, h("div", { class: "name" }, ch.handle), h("div", { class: "role" }, `${S.cg.roles[ch.role]?.ko || ch.role} · ${ch.player || "NPC"}`))),
         h("div", { class: "track" }, "피해", h("button", { class: "sm", onclick: () => setS("damage", Math.max(0, (s.damage || 0) - 1)) }, "−"),
           h("b", { class: "mono" }, s.damage || 0), h("button", { class: "sm", onclick: () => setS("damage", Math.min(40, (s.damage || 0) + 1)) }, "＋"),
           h("span", { class: "wound", style: `background:${(s.damage || 0) > 12 ? "#5a1020" : (s.damage || 0) > 4 ? "#4a3a10" : "#123a24"}` }, woundOf(s.damage))),
+        h("div", { class: "hpbar" }, h("span", { style: `width:${Math.min(100, (s.damage || 0) / 40 * 100)}%` })),
         woundLine(ch, s.damage),
+        !open && (conds.length || sev.length) ? h("div", { class: "chips", style: "margin-top:4px" },
+          sev.map((k) => h("span", { class: "chip debuff" }, `${LOC_KO[k]} 절단`)),
+          conds.slice(0, 4).map((c) => h("span", { class: `chip ${c.kind === "버프" ? "buff" : "debuff"}`, title: c.why || "" }, c.name)),
+          conds.length > 4 ? h("span", { class: "dim small" }, `외 ${conds.length - 4}`) : null) : null,
         h("div", { class: "track" }, `LUCK ${Math.max(0, (ch.stats.LUCK || 0) - (s.luck_used || 0))}/${ch.stats.LUCK}`,
           h("button", { class: "sm ghost", title: "세션 시작 시 회복", onclick: () => setS("luck_used", 0) }, "회복"),
-          h("span", { class: "dim" }, ` BTM ${ch.derived.btm} · 휴머니티 ${ch.derived.humanity}`)));
+          h("span", { class: "dim" }, ` BTM ${ch.derived.btm} · 휴머니티 ${ch.derived.humanity}`)),
+        open ? pcDetail(ch, s, (o) => setS(o)) : null);
     }));
 
   const log = h("div", { class: "log" },
